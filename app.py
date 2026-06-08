@@ -577,6 +577,94 @@ def build_stock_flex_message(code, name, data, url):
         }
     }
 
+def build_welcome_flex():
+    return {
+        "type": "bubble",
+        "size": "mega",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#0f172a",
+            "paddingAll": "20px",
+            "contents": [
+                { "type": "text", "text": "🤖 AI 選股助理", "color": "#38bdf8", "weight": "bold", "size": "xl" }
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#1e293b",
+            "paddingAll": "20px",
+            "spacing": "md",
+            "contents": [
+                { "type": "text", "text": "歡迎使用 AI 量化投資預測！", "color": "#f8fafc", "size": "md", "weight": "bold", "wrap": True },
+                { "type": "text", "text": "您可以：\n1️⃣ 點擊下方選單選擇有興趣的【產業】\n2️⃣ 直接輸入【股票代碼】(如 2330)\n3️⃣ 輸入【大盤】查看今日走勢", "color": "#94a3b8", "size": "sm", "wrap": True, "margin": "md" }
+            ]
+        }
+    }
+
+def _build_stock_row(code):
+    name = get_stock_name(code)
+    return {
+        "type": "box",
+        "layout": "horizontal",
+        "paddingAll": "12px",
+        "cornerRadius": "8px",
+        "backgroundColor": "#ffffff",
+        "spacing": "sm",
+        "margin": "md",
+        "action": { "type": "message", "label": f"查詢 {code}", "text": code },
+        "contents": [
+            { "type": "text", "text": f"{code}", "color": "#64748b", "size": "sm", "weight": "bold", "flex": 2 },
+            { "type": "text", "text": f"{name}", "color": "#0f172a", "size": "md", "weight": "bold", "flex": 4 },
+            { "type": "text", "text": "前往分析 ▶", "color": "#0284c7", "size": "xs", "align": "end", "gravity": "center", "flex": 3 }
+        ]
+    }
+
+def build_industry_carousel(cat, arr):
+    bubbles = []
+    aggr_list = arr[:5]
+    if aggr_list:
+        bubbles.append({
+            "type": "bubble",
+            "size": "mega",
+            "header": {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#ef4444",
+                "paddingAll": "16px",
+                "contents": [ { "type": "text", "text": f"🔥 {cat} | 激進型推薦", "color": "#ffffff", "weight": "bold", "size": "lg" } ]
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#f8fafc",
+                "paddingAll": "12px",
+                "contents": [_build_stock_row(c) for c in aggr_list]
+            }
+        })
+    cons_list = arr[5:10]
+    if cons_list:
+        bubbles.append({
+            "type": "bubble",
+            "size": "mega",
+            "header": {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#3b82f6",
+                "paddingAll": "16px",
+                "contents": [ { "type": "text", "text": f"🛡️ {cat} | 保守型推薦", "color": "#ffffff", "weight": "bold", "size": "lg" } ]
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#f8fafc",
+                "paddingAll": "12px",
+                "contents": [_build_stock_row(c) for c in cons_list]
+            }
+        })
+    return { "type": "carousel", "contents": bubbles }
+
 @app.route("/")
 def home():
     """健康檢查端點：給外部監控服務敲擊，防止 Render 休眠"""
@@ -612,14 +700,14 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="📊 台股大盤預測出爐，點擊查看！", contents=flex_content))
         
     elif msg == "預測":
-        qr, txt = build_category_quick_reply(1)
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=txt, quick_reply=qr))
+        qr, _ = build_category_quick_reply(1)
+        line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="請選擇產業板塊", contents=build_welcome_flex(), quick_reply=qr))
         
     elif msg.startswith("分類第_") and msg.endswith("頁"):
         try: p = int(msg.replace("分類第_", "").replace("頁", ""))
         except: p = 1
-        qr, txt = build_category_quick_reply(p)
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=txt, quick_reply=qr))
+        qr, _ = build_category_quick_reply(p)
+        line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="請選擇產業板塊", contents=build_welcome_flex(), quick_reply=qr))
         
     elif msg == "產業列表":
         lines = ["📚 產業分類總表\n"] + [f"{i}. {c}" for i, c in enumerate(industry_map.keys(), 1)]
@@ -628,12 +716,11 @@ def handle_message(event):
     elif msg.startswith("選產業_"):
         cat = msg.replace("選產業_", "")
         arr = industry_map.get(cat, [])[:10]
-        if not arr: text = "❌ 無資料"
+        if not arr:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 無資料"))
         else:
-            lines = [f"📈 {cat} Top10\n", "🔥 激進型"] + [f"{i}. {c} {get_stock_name(c)}" for i, c in enumerate(arr[:5], 1)]
-            lines += ["\n🛡 保守型"] + [f"{i}. {c} {get_stock_name(c)}" for i, c in enumerate(arr[5:10], 1)]
-            text = "\n".join(lines)
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
+            flex_content = build_industry_carousel(cat, arr)
+            line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text=f"📈 {cat} 推薦名單出爐！", contents=flex_content))
         
     elif msg == "免責聲明":
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="本系統資訊僅供研究參考，不構成投資建議，投資盈虧請自負。"))
