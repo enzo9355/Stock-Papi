@@ -403,6 +403,17 @@ def render_web(d):
     </div>
     {news_html}
 </div>
+
+<div class="card small" style="background: rgba(255, 255, 255, 0.08); border-top: 4px solid #6366f1;">
+    <h2 style="color: #818cf8;">📖 新手投資小辭典 (給剛接觸股市的你)</h2>
+    <div style="margin-bottom: 12px;"><strong>🔹 MA20 (月均線)：</strong>就像是過去一個月的「平均成本」。股價站在上面代表多數人賺錢（趨勢偏多），跌破代表多數人賠錢。</div>
+    <div style="margin-bottom: 12px;"><strong>🔹 RSI (相對強弱)：</strong>用來判斷「是不是漲太多或跌太深」。超過 70 小心過熱，低於 30 代表可能跌過頭了。</div>
+    <div style="margin-bottom: 12px;"><strong>🔹 MACD (動能指標)：</strong>紅柱代表「上漲力道變強」，綠柱代表「下跌力道變強」，就像是踩油門和煞車。</div>
+    <div style="margin-bottom: 12px;"><strong>🔹 KD (隨機指標)：</strong>用來抓「轉折點」。黃金交叉（K往上穿過D）是起漲訊號，死亡交叉是下跌訊號。</div>
+    <div style="margin-bottom: 12px;"><strong>🔹 夏普值 (Sharpe Ratio)：</strong>這就是「CP值」。數值越高，代表承擔一樣的風險下，能賺到的錢越多！</div>
+    <div><strong>🔹 最大回檔 (MDD)：</strong>也就是「歷史最大跌幅」。最倒楣的情況下，你的資產會縮水多少百分比。</div>
+</div>
+
 </div>
 
 <script>
@@ -600,6 +611,52 @@ def build_welcome_flex():
                 { "type": "text", "text": "歡迎使用 AI 量化投資預測！", "color": "#f8fafc", "size": "md", "weight": "bold", "wrap": True },
                 { "type": "text", "text": "您可以：\n1️⃣ 點擊下方選單選擇有興趣的【產業】\n2️⃣ 直接輸入【股票代碼】(如 2330)\n3️⃣ 輸入【大盤】查看今日走勢", "color": "#94a3b8", "size": "sm", "wrap": True, "margin": "md" }
             ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#1e293b",
+            "paddingAll": "16px",
+            "contents": [
+                {
+                    "type": "button",
+                    "style": "secondary",
+                    "color": "#334155",
+                    "action": { "type": "message", "label": "🎓 新手怎麼看？(教學)", "text": "新手教學" }
+                }
+            ]
+        }
+    }
+
+def build_tutorial_flex():
+    return {
+        "type": "bubble",
+        "size": "mega",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#6366f1",
+            "paddingAll": "20px",
+            "contents": [
+                { "type": "text", "text": "🎓 新手快速上手指南", "color": "#ffffff", "weight": "bold", "size": "xl" }
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#f8fafc",
+            "paddingAll": "20px",
+            "spacing": "md",
+            "contents": [
+                { "type": "text", "text": "不用擔心看不懂複雜的數據，只要掌握以下三個重點：", "color": "#475569", "size": "sm", "wrap": True, "weight": "bold", "margin": "sm" },
+                { "type": "separator", "margin": "md", "color": "#cbd5e1" },
+                { "type": "text", "text": "🎯 1. 看「AI 勝率」", "color": "#0f172a", "size": "md", "weight": "bold", "margin": "md" },
+                { "type": "text", "text": "AI 會根據過去的數據幫你算出上漲機率。大於 60% 代表勝率偏高（綠字），低於 40% 建議保守觀望（紅字）。", "color": "#64748b", "size": "sm", "wrap": True },
+                { "type": "text", "text": "🌡 2. 看「新聞情緒」", "color": "#0f172a", "size": "md", "weight": "bold", "margin": "md" },
+                { "type": "text", "text": "我們會自動分析最近的新聞是利多還利空。「樂觀貪婪」代表市場氣氛好，「悲觀恐慌」代表市場害怕。", "color": "#64748b", "size": "sm", "wrap": True },
+                { "type": "text", "text": "📖 3. 專有名詞看不懂？", "color": "#0f172a", "size": "md", "weight": "bold", "margin": "md" },
+                { "type": "text", "text": "直接點擊個股的「📈 查看圖表與回測報告」，滑到網頁最下方，就有白話文的【新手投資小辭典】幫你翻譯各種專業術語喔！", "color": "#64748b", "size": "sm", "wrap": True }
+            ]
         }
     }
 
@@ -724,6 +781,9 @@ def handle_message(event):
         
     elif msg == "免責聲明":
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="本系統資訊僅供研究參考，不構成投資建議，投資盈虧請自負。"))
+
+    elif msg == "新手教學":
+        line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="🎓 新手快速上手指南", contents=build_tutorial_flex()))
         
     else:
         code, name = search_stock_code(msg)
