@@ -14,6 +14,7 @@ import numpy as np
 import json
 import google.generativeai as genai
 
+from snownlp import SnowNLP
 from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
 from flask import Flask, request, abort, render_template_string
@@ -137,11 +138,31 @@ def calc_all(df):
     g, l = d.clip(lower=0).rolling(14).mean(), -d.clip(upper=0).rolling(14).mean()
     df["RSI"] = 100 - (100 / (1 + (g / (l + 1e-9))))
     df['Volat'] = df['RET_1'].rolling(20).std()
+    
+    # MACD
+    ema12 = c.ewm(span=12, adjust=False).mean()
+    ema26 = c.ewm(span=26, adjust=False).mean()
+    df['MACD_DIF'] = ema12 - ema26
+    df['MACD'] = df['MACD_DIF'].ewm(span=9, adjust=False).mean()
+    df['MACD_OSC'] = df['MACD_DIF'] - df['MACD']
+    
+    # KD
+    high9 = df['High'].rolling(9).max()
+    low9 = df['Low'].rolling(9).min()
+    rsv = (c - low9) / (high9 - low9 + 1e-9) * 100
+    df['K'] = rsv.ewm(com=2, adjust=False).mean()
+    df['D'] = df['K'].ewm(com=2, adjust=False).mean()
+    
+    # Bollinger Bands
+    std20 = c.rolling(20).std()
+    df['BB_UP'] = df['MA20'] + 2 * std20
+    df['BB_DN'] = df['MA20'] - 2 * std20
+    
     return df.dropna()
 
 def run_ai_engine(df):
     try:
-        feats = ['MA_5', 'MA20', 'RET_1', 'RSI', 'Volat']
+        feats = ['MA_5', 'MA20', 'RET_1', 'RSI', 'Volat', 'MACD_OSC', 'K', 'D']
         w_df = df.copy()
         w_df['T'] = (w_df['Close'].shift(-5) > w_df['Close']).astype(int)
         v_df = w_df.dropna(subset=['T']).copy()
@@ -163,7 +184,7 @@ def run_ai_engine(df):
         strat_ret = np.where(probs > 0.6, rets, 0)
         
         imps = model.feature_importances_
-        f_map = {'MA_5':'5日均線短線動能', 'MA20':'月線趨勢支撐狀態', 'RET_1':'單日股價反轉動能', 'RSI':'RSI 超買超賣冷熱度', 'Volat':'近20日價格波動收斂度'}
+        f_map = {'MA_5':'5日均線動能', 'MA20':'月線趨勢支撐', 'RET_1':'反轉動能', 'RSI':'RSI 強弱度', 'Volat':'波動收斂度', 'MACD_OSC':'MACD 柱狀體動能', 'K':'KD K值', 'D':'KD D值'}
         top = [f"{f_map.get(f, f)} (貢獻度: {(i/sum(imps))*100:.1f}%)" for f, i in sorted(zip(feats, imps), key=lambda x:x[1], reverse=True)[:3]]
         while len(top) < 3: top.append("無")
         
@@ -215,6 +236,25 @@ AI勝率:{data['prob']}%
 # ==================================================
 # 4. 分析總控
 # ==================================================
+def analyze_sentiment(news_list):
+    if not news_list: return 50, "中性"
+    scores = []
+    pos_words = ["漲", "紅", "高", "多", "買", "利多", "創紀錄", "看好", "強", "優"]
+    neg_words = ["跌", "綠", "低", "空", "賣", "利空", "虧", "看壞", "弱", "劣", "崩", "違約"]
+    for n in news_list:
+        t = n['title']
+        s = SnowNLP(t).sentiments
+        # 加權關鍵字
+        for w in pos_words: 
+            if w in t: s += 0.2
+        for w in neg_words: 
+            if w in t: s -= 0.2
+        scores.append(max(0, min(1, s)))
+    avg_s = sum(scores) / len(scores) * 100
+    if avg_s > 70: return avg_s, "🔥 樂觀貪婪"
+    elif avg_s < 30: return avg_s, "😨 悲觀恐慌"
+    else: return avg_s, "⚖️ 中性觀望"
+
 def _do_analyze(code):
     df = get_data(code)
     if df.empty or len(df) < 200: return None
@@ -225,7 +265,13 @@ def _do_analyze(code):
     last = df.iloc[-1]
     name = get_stock_name(code)
     news = get_news(name)
-    prob = int(last['AI_P'])
+    
+    s_score, s_status = analyze_sentiment(news)
+    prob = last['AI_P']
+    if s_score > 70: prob += 2
+    elif s_score < 30: prob -= 2
+    prob = int(max(0, min(100, prob)))
+    
     trend = "多頭" if last['Close'] > last['MA20'] else "空頭"
     
     tv_df = df.copy().reset_index()
@@ -251,6 +297,8 @@ def _do_analyze(code):
         "code": code, "name": name, "price": last['Close'], "prob": prob, 
         "bt": bt, "news": news, "trend": trend,
         "rsi": last['RSI'], "ma20": last['MA20'],
+        "macd_osc": last['MACD_OSC'], "k": last['K'], "d": last['D'],
+        "s_score": s_score, "s_status": s_status,
         "candles": json.dumps(tv_df[['Date','Open','High_corr','Low_corr','Close']].rename(columns={'Date':'time','Open':'open','High_corr':'high','Low_corr':'low','Close':'close'}).to_dict('records')),
         "ma20_line": json.dumps(tv_df[['Date','MA20']].dropna().rename(columns={'Date':'time','MA20':'value'}).to_dict('records')),
         "prob_h": json.dumps(tv_df[['Date','AI_P']].rename(columns={'Date':'time','AI_P':'value'}).to_dict('records')),
@@ -326,7 +374,9 @@ def render_web(d):
         📈 趨勢判讀：{d['trend']}<br>
         🌊 均線狀態：{'站上 MA20 (支撐強)' if d['price'] > d['ma20'] else '跌破 MA20 (壓力大)'}<br>
         🌡 RSI 強弱：{'動能偏強' if d['rsi'] >= 55 else '中性' if d['rsi'] >= 45 else '動能偏弱'}<br>
-        🎯 評估勝率：<span class="highlight">{d['prob']}%</span>
+        📊 MACD 柱狀：{'紅柱 (多頭動能)' if d['macd_osc'] > 0 else '綠柱 (空頭動能)'}<br>
+        📉 KD 指標：{'黃金交叉' if d['k'] > d['d'] else '死亡交叉'}<br>
+        🎯 綜合 AI 勝率：<span class="highlight">{d['prob']}%</span>
     </div>
 </div>
 
@@ -347,7 +397,11 @@ def render_web(d):
 </div>
 
 <div class="card small">
-    <h2>📰 相關即時新聞</h2>
+    <h2>📰 相關即時新聞與情緒分析</h2>
+    <div style="margin-bottom: 15px; background: rgba(255,255,255,0.05); padding: 15px; border-radius: 12px; border-left: 4px solid {'#ef5350' if d['s_score']<40 else '#26a69a'};">
+        <span style="color: #aaa; font-size: 14px;">市場情緒分數</span><br>
+        <span style="font-size: 24px; font-weight: bold; color: {'#ef5350' if d['s_score']<40 else '#26a69a'};">{d['s_score']:.1f} ({d['s_status']})</span>
+    </div>
     {news_html}
 </div>
 </div>
@@ -469,7 +523,7 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="大盤資料暫時無法取得，請稍後再試。"))
             return
         url = f"{request.host_url}market".replace("http://", "https://")
-        text = f"📊 台股大盤（加權指數）\n\n💰 指數點位：{data['price']:.2f}\n📈 當前趨勢：{data['trend']}\n🎯 真實 AI 預測勝率：{data['prob']}%\n\n📌 點擊查看【完整數據與回測分析】：\n{url}"
+        text = f"📊 台股大盤（加權指數）\n\n💰 指數點位：{data['price']:.2f}\n📈 當前趨勢：{data['trend']}\n🌡 市場情緒：{data['s_status']} ({data['s_score']:.1f})\n🎯 真實 AI 預測勝率：{data['prob']}%\n\n📌 點擊查看【完整數據與回測分析】：\n{url}"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
         
     elif msg == "預測":
@@ -507,7 +561,7 @@ def handle_message(event):
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無資料，請稍後再試。"))
                 return
             url = f"{request.host_url}stock/{code}".replace("http://", "https://")
-            text = f"📊 {name} ({code})\n\n💰 最新收盤：{data['price']:.2f}\n📈 當前趨勢：{data['trend']}\n🎯 真實 AI 預測勝率：{data['prob']}%\n\n📌 點擊查看【完整數據與回測分析】：\n{url}"
+            text = f"📊 {name} ({code})\n\n💰 最新收盤：{data['price']:.2f}\n📈 當前趨勢：{data['trend']}\n🌡 新聞情緒：{data['s_status']} ({data['s_score']:.1f})\n🎯 綜合 AI 預測勝率：{data['prob']}%\n\n📌 點擊查看【完整數據與回測分析】：\n{url}"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
         else:
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請輸入股票代碼，或輸入：預測 / 大盤預測 / 產業列表"))
