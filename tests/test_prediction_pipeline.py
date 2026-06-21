@@ -12,6 +12,41 @@ os.environ.setdefault("LINE_CHANNEL_SECRET", "test")
 import app as stock_app
 
 
+def sample_analysis_data(news=None):
+    return {
+        "name": "台積電",
+        "code": "2330",
+        "price": 100.0,
+        "prob": 55,
+        "bt": {
+            "days": 30,
+            "accuracy": 52.5,
+            "brier": 0.24,
+            "strat_cum": 1.0,
+            "bh_cum": 0.5,
+            "win_rate": 55.0,
+            "trades": 4,
+            "mdd": -2.0,
+            "sharpe": 0.8,
+            "conclusion": "test",
+            "top_features": ["a", "b", "c"],
+        },
+        "news": news or [],
+        "trend": "多頭",
+        "rsi": 55.0,
+        "ma20": 99.0,
+        "macd_osc": 0.1,
+        "k": 60.0,
+        "d": 50.0,
+        "s_score": 50.0,
+        "s_status": "中性",
+        "candles": "[]",
+        "ma20_line": "[]",
+        "prob_h": "[]",
+        "pred": "[]",
+    }
+
+
 class PredictionPipelineTests(unittest.TestCase):
     def test_last_five_rows_have_no_training_target(self):
         frame = pd.DataFrame({"Close": np.arange(1.0, 21.0)})
@@ -209,39 +244,7 @@ class PredictionPipelineTests(unittest.TestCase):
         self.assertEqual(len(json.loads(result["prob_h"])), 1)
 
     def test_web_and_line_messages_name_the_five_day_probability(self):
-        backtest = {
-            "days": 30,
-            "accuracy": 52.5,
-            "brier": 0.24,
-            "strat_cum": 1.0,
-            "bh_cum": 0.5,
-            "win_rate": 55.0,
-            "trades": 4,
-            "mdd": -2.0,
-            "sharpe": 0.8,
-            "conclusion": "test",
-            "top_features": ["a", "b", "c"],
-        }
-        data = {
-            "name": "台積電",
-            "code": "2330",
-            "price": 100.0,
-            "prob": 55,
-            "bt": backtest,
-            "news": [],
-            "trend": "多頭",
-            "rsi": 55.0,
-            "ma20": 99.0,
-            "macd_osc": 0.1,
-            "k": 60.0,
-            "d": 50.0,
-            "s_score": 50.0,
-            "s_status": "中性",
-            "candles": "[]",
-            "ma20_line": "[]",
-            "prob_h": "[]",
-            "pred": "[]",
-        }
+        data = sample_analysis_data()
 
         with stock_app.app.app_context():
             html = stock_app.render_web(data)
@@ -254,6 +257,44 @@ class PredictionPipelineTests(unittest.TestCase):
         self.assertIn("五日方向準確率", html)
         self.assertIn("Brier Score", html)
         self.assertNotIn("AI 勝率", rendered)
+
+    def test_external_news_is_escaped_without_template_evaluation(self):
+        data = sample_analysis_data(
+            [{"title": "{{ 7 * 7 }}<script>", "link": 'https://example.com/\" onmouseover=\"bad'}]
+        )
+
+        with stock_app.app.app_context():
+            html = stock_app.render_web(data)
+
+        self.assertIn("{{ 7 * 7 }}&lt;script&gt;", html)
+        self.assertIn("&quot; onmouseover=&quot;bad", html)
+        self.assertNotIn("49<script>", html)
+
+    @patch("app.analyze", return_value=None)
+    def test_stock_route_rejects_unknown_code_before_analysis(self, analyze):
+        response = stock_app.app.test_client().get("/stock/not-a-stock")
+
+        self.assertEqual(response.status_code, 404)
+        analyze.assert_not_called()
+
+    @patch("app.requests.get")
+    def test_news_rejects_xml_entity_expansion(self, get):
+        get.return_value.text = """<!DOCTYPE rss [<!ENTITY payload "expanded">]>
+        <rss><channel><item><title>&payload;</title><link>https://example.com</link></item></channel></rss>"""
+
+        self.assertEqual(stock_app.get_news("台積電"), [])
+
+    def test_local_development_server_defaults_to_loopback(self):
+        self.assertEqual(getattr(stock_app, "LOCAL_HOST", None), "127.0.0.1")
+
+    def test_callback_rejects_oversized_payload(self):
+        response = stock_app.app.test_client().post(
+            "/callback",
+            data=b"x" * 1_000_001,
+            headers={"X-Line-Signature": "invalid"},
+        )
+
+        self.assertEqual(response.status_code, 413)
 
 
 if __name__ == "__main__":

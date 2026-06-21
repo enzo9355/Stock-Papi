@@ -5,10 +5,11 @@
 import os
 import time
 import datetime
+from html import escape
 import requests
 import pandas as pd
 import twstock
-import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as ET
 import urllib.parse
 import numpy as np
 import json
@@ -16,7 +17,7 @@ import google.generativeai as genai
 
 from sklearn.model_selection import TimeSeriesSplit
 from lightgbm import LGBMClassifier
-from flask import Flask, request, abort, render_template_string
+from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
@@ -32,9 +33,11 @@ LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 FINMIND_USER = os.getenv("FINMIND_USER")
 FINMIND_PASSWORD = os.getenv("FINMIND_PASSWORD")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+LOCAL_HOST = os.getenv("HOST", "127.0.0.1")
 BROADCAST_TOKEN = os.getenv("BROADCAST_TOKEN", "default_secret")
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 1_000_000
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
@@ -385,7 +388,7 @@ def run_ai_engine(df):
                 else "⚠️ 模型失真：容易追高殺低。"
             )
         return metrics
-    except Exception as e: 
+    except Exception as e:
         print(f"回測引擎錯誤: {e}")
         return None
 
@@ -496,7 +499,10 @@ def market_forecast(): return analyze("TAIEX")
 # ==================================================
 def render_web(d):
     bt = d['bt']
-    news_html = "".join([f'<a href="{n["link"]}" target="_blank" class="news-link">🔹 {n["title"]}</a>' for n in d['news']]) if d['news'] else "暫無相關新聞"
+    news_html = "".join(
+        f'<a href="{escape(str(n["link"]), quote=True)}" target="_blank" rel="noopener noreferrer" class="news-link">🔹 {escape(str(n["title"]))}</a>'
+        for n in d['news']
+    ) if d['news'] else "暫無相關新聞"
     
     html = f"""
 <!DOCTYPE html>
@@ -625,7 +631,7 @@ def render_web(d):
 </body>
 </html>
 """
-    return render_template_string(html)
+    return html
 
 # ==================================================
 # 6. 動態產業分類與選單生成
@@ -906,6 +912,8 @@ def home():
 
 @app.route("/stock/<code>")
 def stock_page(code):
+    if code not in twstock.codes:
+        abort(404)
     d = analyze(code)
     return render_web(d) if d else "查無資料"
 
@@ -917,7 +925,7 @@ def market_page():
 @app.route("/callback", methods=["POST"])
 def callback():
     try: handler.handle(request.get_data(as_text=True), request.headers.get("X-Line-Signature", ""))
-    except: abort(400)
+    except InvalidSignatureError: abort(400)
     return "OK"
 
 @handler.add(MessageEvent, message=TextMessage)
@@ -976,4 +984,4 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請輸入股票代碼，或輸入：預測 / 大盤預測 / 產業列表"))
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host=LOCAL_HOST, port=int(os.environ.get("PORT", 5000)))

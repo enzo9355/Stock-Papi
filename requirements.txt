@@ -2,6 +2,7 @@ flask
 gunicorn
 line-bot-sdk
 requests
+defusedxml
 pandas
 numpy
 twstock
