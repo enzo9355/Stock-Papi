@@ -15,6 +15,7 @@ import json
 import google.generativeai as genai
 
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import TimeSeriesSplit
 from lightgbm import LGBMClassifier
 from flask import Flask, request, abort, render_template_string
 from linebot import LineBotApi, WebhookHandler
@@ -46,6 +47,9 @@ else:
 
 finmind_token = ""
 CATEGORY_PAGE_SIZE = 12
+PREDICTION_HORIZON = 5
+ROUND_TRIP_COST = 0.00585
+ENTRY_THRESHOLD = 0.60
 
 _SYSTEM_CACHE = {}
 CACHE_EXPIRY_SECONDS = 3600  
@@ -158,6 +162,52 @@ def calc_all(df):
     df['BB_DN'] = df['MA20'] - 2 * std20
     
     return df.dropna()
+
+def add_prediction_target(df):
+    result = df.copy()
+    future = result["Close"].shift(-PREDICTION_HORIZON) / result["Close"] - 1
+    result["FUTURE_RET_5"] = future
+    result["T"] = np.where(future.notna(), (future > 0).astype(float), np.nan)
+    return result
+
+def build_time_splits(n_samples):
+    splitter = TimeSeriesSplit(n_splits=5, gap=PREDICTION_HORIZON)
+    return list(splitter.split(np.arange(n_samples)))
+
+def score_oos_predictions(future_returns, probabilities):
+    frame = pd.DataFrame({"future": future_returns, "prob": probabilities}).dropna()
+    target = (frame["future"] > 0).astype(int)
+    sampled = frame.iloc[::PREDICTION_HORIZON]
+    entries = sampled["prob"] >= ENTRY_THRESHOLD
+    strategy_returns = np.where(
+        entries,
+        sampled["future"] - ROUND_TRIP_COST,
+        0.0,
+    )
+    cumulative = np.cumprod(1 + strategy_returns)
+    buy_hold = np.cumprod(1 + sampled["future"].to_numpy())
+    active = sampled.loc[entries, "future"] - ROUND_TRIP_COST
+    mdd = (
+        (cumulative / np.maximum.accumulate(cumulative) - 1).min() * 100
+        if len(cumulative)
+        else 0.0
+    )
+    std = np.std(strategy_returns)
+    return {
+        "days": len(frame),
+        "accuracy": ((frame["prob"] >= 0.5).astype(int) == target).mean() * 100,
+        "brier": np.mean((frame["prob"] - target) ** 2),
+        "strat_cum": (cumulative[-1] - 1) * 100 if len(cumulative) else 0.0,
+        "bh_cum": (buy_hold[-1] - 1) * 100 if len(buy_hold) else 0.0,
+        "win_rate": (active > 0).mean() * 100 if len(active) else 0.0,
+        "trades": int(entries.sum()),
+        "mdd": mdd,
+        "sharpe": (
+            np.mean(strategy_returns) / std * np.sqrt(252 / PREDICTION_HORIZON)
+            if std
+            else 0.0
+        ),
+    }
 
 def run_ai_engine(df):
     try:
