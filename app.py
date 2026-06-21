@@ -394,7 +394,7 @@ def get_ai_insight_for_broadcast(name, data, bt, news):
     n_txt = "\n".join([n['title'] for n in news])
     prompt = f"""請以資深分析師語氣，針對{name}撰寫100字內洞見。不要廢話，直接給建議。
 最新價:{data['price']}
-AI勝率:{data['prob']}%
+五日上漲機率:{data['prob']}%
 夏普值:{bt['sharpe']:.2f}
 新聞:\n{n_txt}"""
     try:
@@ -475,7 +475,7 @@ def _do_analyze(code):
         "s_score": s_score, "s_status": s_status,
         "candles": json.dumps(tv_df[['Date','Open','High_corr','Low_corr','Close']].rename(columns={'Date':'time','Open':'open','High_corr':'high','Low_corr':'low','Close':'close'}).to_dict('records')),
         "ma20_line": json.dumps(tv_df[['Date','MA20']].dropna().rename(columns={'Date':'time','MA20':'value'}).to_dict('records')),
-        "prob_h": json.dumps(tv_df[['Date','AI_P']].rename(columns={'Date':'time','AI_P':'value'}).to_dict('records')),
+        "prob_h": json.dumps(tv_df[['Date','AI_P']].dropna().rename(columns={'Date':'time','AI_P':'value'}).to_dict('records')),
         "pred": json.dumps(pred)
     }
 
@@ -527,7 +527,7 @@ def render_web(d):
 <div class="card small">
     💰 最新收盤：<span class="highlight">{d['price']:.2f}</span><br>
     📈 當前趨勢：{d['trend']}<br>
-    🎯 真實 AI 預測勝率：<span class="highlight">{d['prob']}%</span>
+    🎯 五日上漲機率：<span class="highlight">{d['prob']}%</span>
 </div>
 
 <div class="card">
@@ -550,7 +550,7 @@ def render_web(d):
         🌡 RSI 強弱：{'動能偏強' if d['rsi'] >= 55 else '中性' if d['rsi'] >= 45 else '動能偏弱'}<br>
         📊 MACD 柱狀：{'紅柱 (多頭動能)' if d['macd_osc'] > 0 else '綠柱 (空頭動能)'}<br>
         📉 KD 指標：{'黃金交叉' if d['k'] > d['d'] else '死亡交叉'}<br>
-        🎯 綜合 AI 勝率：<span class="highlight">{d['prob']}%</span>
+        🎯 五日上漲機率：<span class="highlight">{d['prob']}%</span>
     </div>
 </div>
 
@@ -559,6 +559,8 @@ def render_web(d):
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 20px;">
         <div style="background: rgba(0,0,0,0.25); padding: 15px; border-radius: 12px; text-align: center;"><div style="font-size: 13px; color: #aaa; margin-bottom: 5px;">AI 策略報酬</div><div class="highlight" style="font-size: 1.3em;">{bt['strat_cum']:.2f}%</div></div>
         <div style="background: rgba(0,0,0,0.25); padding: 15px; border-radius: 12px; text-align: center;"><div style="font-size: 13px; color: #aaa; margin-bottom: 5px;">買進持有報酬</div><div style="font-size: 1.3em; color: #ddd;">{bt['bh_cum']:.2f}%</div></div>
+        <div style="background: rgba(0,0,0,0.25); padding: 15px; border-radius: 12px; text-align: center;"><div style="font-size: 13px; color: #aaa; margin-bottom: 5px;">五日方向準確率</div><div style="font-size: 1.3em; color: #ddd;">{bt['accuracy']:.1f}%</div></div>
+        <div style="background: rgba(0,0,0,0.25); padding: 15px; border-radius: 12px; text-align: center;"><div style="font-size: 13px; color: #aaa; margin-bottom: 5px;">Brier Score</div><div style="font-size: 1.3em; color: #ddd;">{bt['brier']:.3f}</div></div>
         <div style="background: rgba(0,0,0,0.25); padding: 15px; border-radius: 12px; text-align: center;"><div style="font-size: 13px; color: #aaa; margin-bottom: 5px;">進場勝率</div><div style="font-size: 1.3em; color: #ddd;">{bt['win_rate']:.1f}%</div></div>
         <div style="background: rgba(0,0,0,0.25); padding: 15px; border-radius: 12px; text-align: center;"><div style="font-size: 13px; color: #aaa; margin-bottom: 5px;">交易次數</div><div style="font-size: 1.3em; color: #ddd;">{bt['trades']} 次</div></div>
         <div style="background: rgba(0,0,0,0.25); padding: 15px; border-radius: 12px; text-align: center;"><div style="font-size: 13px; color: #aaa; margin-bottom: 5px;">最大回檔</div><div style="font-size: 1.3em; color: #ff6b6b;">{bt['mdd']:.2f}%</div></div>
@@ -737,7 +739,7 @@ def build_stock_flex_message(code, name, data, url):
                     "layout": "horizontal",
                     "margin": "md",
                     "contents": [
-                        { "type": "text", "text": "🎯 AI 勝率", "color": "#0f172a", "size": "md", "weight": "bold", "flex": 4 },
+                        { "type": "text", "text": "🎯 五日上漲機率", "color": "#0f172a", "size": "md", "weight": "bold", "flex": 4 },
                         { "type": "text", "text": f"{data['prob']}%", "color": color_prob, "size": "lg", "weight": "bold", "align": "end", "flex": 5 }
                     ]
                 }
@@ -825,8 +827,8 @@ def build_tutorial_flex():
             "contents": [
                 { "type": "text", "text": "不用擔心看不懂複雜的數據，只要掌握以下三個重點：", "color": "#475569", "size": "sm", "wrap": True, "weight": "bold", "margin": "sm" },
                 { "type": "separator", "margin": "md", "color": "#cbd5e1" },
-                { "type": "text", "text": "🎯 1. 看「AI 勝率」", "color": "#0f172a", "size": "md", "weight": "bold", "margin": "md" },
-                { "type": "text", "text": "AI 會根據過去的數據幫你算出上漲機率。大於 60% 代表勝率偏高（綠字），低於 40% 建議保守觀望（紅字）。", "color": "#64748b", "size": "sm", "wrap": True },
+                { "type": "text", "text": "🎯 1. 看「五日上漲機率」", "color": "#0f172a", "size": "md", "weight": "bold", "margin": "md" },
+                { "type": "text", "text": "AI 會根據過去的數據估計五個交易日後上漲的機率。大於 60% 代表機率偏高（綠字），低於 40% 建議保守觀望（紅字）。", "color": "#64748b", "size": "sm", "wrap": True },
                 { "type": "text", "text": "🌡 2. 看「新聞情緒」", "color": "#0f172a", "size": "md", "weight": "bold", "margin": "md" },
                 { "type": "text", "text": "我們會自動分析最近的新聞是利多還利空。「樂觀貪婪」代表市場氣氛好，「悲觀恐慌」代表市場害怕。", "color": "#64748b", "size": "sm", "wrap": True },
                 { "type": "text", "text": "📖 3. 專有名詞看不懂？", "color": "#0f172a", "size": "md", "weight": "bold", "margin": "md" },

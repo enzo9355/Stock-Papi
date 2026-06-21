@@ -1,3 +1,4 @@
+import json
 import os
 import unittest
 from unittest.mock import Mock, patch
@@ -177,7 +178,7 @@ class PredictionPipelineTests(unittest.TestCase):
                 "MACD_OSC": 0.1,
                 "K": 60.0,
                 "D": 50.0,
-                "AI_P": 55.0,
+                "AI_P": [np.nan] * 199 + [55.0],
             },
             index=index,
         )
@@ -205,6 +206,54 @@ class PredictionPipelineTests(unittest.TestCase):
             result = stock_app._do_analyze("2330")
 
         self.assertEqual(result["prob"], 55)
+        self.assertEqual(len(json.loads(result["prob_h"])), 1)
+
+    def test_web_and_line_messages_name_the_five_day_probability(self):
+        backtest = {
+            "days": 30,
+            "accuracy": 52.5,
+            "brier": 0.24,
+            "strat_cum": 1.0,
+            "bh_cum": 0.5,
+            "win_rate": 55.0,
+            "trades": 4,
+            "mdd": -2.0,
+            "sharpe": 0.8,
+            "conclusion": "test",
+            "top_features": ["a", "b", "c"],
+        }
+        data = {
+            "name": "台積電",
+            "code": "2330",
+            "price": 100.0,
+            "prob": 55,
+            "bt": backtest,
+            "news": [],
+            "trend": "多頭",
+            "rsi": 55.0,
+            "ma20": 99.0,
+            "macd_osc": 0.1,
+            "k": 60.0,
+            "d": 50.0,
+            "s_score": 50.0,
+            "s_status": "中性",
+            "candles": "[]",
+            "ma20_line": "[]",
+            "prob_h": "[]",
+            "pred": "[]",
+        }
+
+        with stock_app.app.app_context():
+            html = stock_app.render_web(data)
+        flex = stock_app.build_stock_flex_message(
+            "2330", "台積電", data, "https://example.com"
+        )
+        rendered = html + json.dumps(flex, ensure_ascii=False)
+
+        self.assertIn("五日上漲機率", rendered)
+        self.assertIn("五日方向準確率", html)
+        self.assertIn("Brier Score", html)
+        self.assertNotIn("AI 勝率", rendered)
 
 
 if __name__ == "__main__":
