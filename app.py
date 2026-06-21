@@ -14,7 +14,6 @@ import numpy as np
 import json
 import google.generativeai as genai
 
-from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import TimeSeriesSplit
 from lightgbm import LGBMClassifier
 from flask import Flask, request, abort, render_template_string
@@ -50,6 +49,11 @@ CATEGORY_PAGE_SIZE = 12
 PREDICTION_HORIZON = 5
 ROUND_TRIP_COST = 0.00585
 ENTRY_THRESHOLD = 0.60
+MODEL_FEATURES = [
+    "MA_5", "MA20", "RET_1", "RET_5", "RET_20", "RSI", "Volat",
+    "RANGE_PCT", "VOL_RATIO", "VOL_CHG", "INST_NET_RATIO", "MARGIN_CHG",
+    "SHORT_CHG", "MACD_OSC", "K", "D",
+]
 
 _SYSTEM_CACHE = {}
 CACHE_EXPIRY_SECONDS = 3600  
@@ -299,53 +303,88 @@ def score_oos_predictions(future_returns, probabilities):
 
 def run_ai_engine(df):
     try:
-        feats = ['MA_5', 'MA20', 'RET_1', 'RSI', 'Volat', 'MACD_OSC', 'K', 'D']
-        w_df = df.copy()
-        w_df['T'] = (w_df['Close'].shift(-5) > w_df['Close']).astype(int)
-        v_df = w_df.dropna(subset=['T']).copy()
-        
-        if len(v_df) < 60: return None
-        split = int(len(v_df) * 0.8)
-        
-        sc = StandardScaler()
-        X_tr = sc.fit_transform(v_df.iloc[:split][feats])
-        model = LGBMClassifier(n_estimators=80, learning_rate=0.05, max_depth=4, random_state=42, verbose=-1)
-        model.fit(X_tr, v_df.iloc[:split]['T'])
-        
-        df['AI_P'] = model.predict_proba(sc.transform(df[feats].ffill().bfill()))[:, 1] * 100
-        
-        X_te = sc.transform(v_df.iloc[split:][feats])
-        probs = model.predict_proba(X_te)[:, 1]
-        
-        rets = (v_df.iloc[split:]['Close'].shift(-1) / v_df.iloc[split:]['Close'] - 1).fillna(0).values
-        strat_ret = np.where(probs > 0.6, rets, 0)
-        
-        imps = model.feature_importances_
-        f_map = {'MA_5':'5日均線動能', 'MA20':'月線趨勢支撐', 'RET_1':'反轉動能', 'RSI':'RSI 強弱度', 'Volat':'波動收斂度', 'MACD_OSC':'MACD 柱狀體動能', 'K':'KD K值', 'D':'KD D值'}
-        top = [f"{f_map.get(f, f)} (貢獻度: {(i/sum(imps))*100:.1f}%)" for f, i in sorted(zip(feats, imps), key=lambda x:x[1], reverse=True)[:3]]
-        while len(top) < 3: top.append("無")
-        
-        cum_ret = np.cumprod(1 + strat_ret)
-        bh_ret = np.cumprod(1 + rets)
-        
-        strat_cum = cum_ret[-1] - 1 if len(cum_ret) > 0 else 0
-        bh_cum = bh_ret[-1] - 1 if len(bh_ret) > 0 else 0
-        win_rate = (strat_ret[strat_ret!=0]>0).mean()*100 if len(strat_ret[strat_ret!=0])>0 else 0
-        trades = len(strat_ret[strat_ret!=0])
-        
-        days_in_test = len(rets)
-        mdd = (cum_ret/np.maximum.accumulate(cum_ret)-1).min()*100 if len(cum_ret) > 0 else 0
-        sharpe = (strat_ret.mean()/strat_ret.std())*np.sqrt(252) if strat_ret.std()!=0 else 0
+        training = add_prediction_target(df).dropna(
+            subset=MODEL_FEATURES + ["FUTURE_RET_5", "T"]
+        )
+        if len(training) < 100 or training["T"].nunique() < 2:
+            return None
 
-        if trades == 0: conclusion = "⏸️ 訊號空窗：模型未發現高勝率進場點，選擇空手觀望。"
-        elif strat_cum > bh_cum: conclusion = "✅ 策略優勢：高報酬且風險控制優異。" if sharpe > 1 else "✅ 擊敗大盤：能創造超額報酬。"
-        else: conclusion = "🛡️ 下檔保護：大跌時具備避險作用。" if mdd > -15 else "⚠️ 模型失真：容易追高殺低。"
+        oos_prob = pd.Series(np.nan, index=training.index, dtype=float)
+        for train_index, test_index in build_time_splits(len(training)):
+            fold = training.iloc[train_index]
+            if fold["T"].nunique() < 2:
+                continue
+            model = LGBMClassifier(
+                n_estimators=80,
+                learning_rate=0.05,
+                max_depth=4,
+                random_state=42,
+                verbose=-1,
+            )
+            model.fit(fold[MODEL_FEATURES], fold["T"].astype(int))
+            oos_prob.iloc[test_index] = model.predict_proba(
+                training.iloc[test_index][MODEL_FEATURES]
+            )[:, 1]
 
-        return {
-            "days": days_in_test, "strat_cum": strat_cum * 100, "bh_cum": bh_cum * 100,
-            "win_rate": win_rate, "trades": trades, "mdd": mdd, "sharpe": sharpe, 
-            "conclusion": conclusion, "top_features": top
+        valid = oos_prob.notna()
+        if valid.sum() < 30:
+            return None
+        metrics = score_oos_predictions(
+            training.loc[valid, "FUTURE_RET_5"],
+            oos_prob.loc[valid],
+        )
+
+        final_model = LGBMClassifier(
+            n_estimators=80,
+            learning_rate=0.05,
+            max_depth=4,
+            random_state=42,
+            verbose=-1,
+        )
+        final_model.fit(training[MODEL_FEATURES], training["T"].astype(int))
+        latest_probability = final_model.predict_proba(
+            df.iloc[[-1]][MODEL_FEATURES]
+        )[0, 1]
+
+        df["AI_P"] = np.nan
+        df.loc[oos_prob.loc[valid].index, "AI_P"] = oos_prob.loc[valid] * 100
+        df.loc[df.index[-1], "AI_P"] = latest_probability * 100
+
+        feature_names = {
+            "MA_5": "5日均線動能", "MA20": "月線趨勢支撐",
+            "RET_1": "單日反轉動能", "RET_5": "5日價格動能",
+            "RET_20": "月報酬動能", "RSI": "RSI 強弱度",
+            "Volat": "波動收斂度", "RANGE_PCT": "日內振幅",
+            "VOL_RATIO": "成交量趨勢", "VOL_CHG": "成交量變化",
+            "INST_NET_RATIO": "法人買賣超", "MARGIN_CHG": "融資變化",
+            "SHORT_CHG": "融券變化", "MACD_OSC": "MACD 柱狀體動能",
+            "K": "KD K值", "D": "KD D值",
         }
+        importances = final_model.feature_importances_
+        total_importance = max(float(importances.sum()), 1.0)
+        metrics["top_features"] = [
+            f"{feature_names.get(feature, feature)} (貢獻度: {importance / total_importance * 100:.1f}%)"
+            for feature, importance in sorted(
+                zip(MODEL_FEATURES, importances),
+                key=lambda item: item[1],
+                reverse=True,
+            )[:3]
+        ]
+        if metrics["trades"] == 0:
+            metrics["conclusion"] = "⏸️ 訊號空窗：模型未發現高勝率進場點，選擇空手觀望。"
+        elif metrics["strat_cum"] > metrics["bh_cum"]:
+            metrics["conclusion"] = (
+                "✅ 策略優勢：高報酬且風險控制優異。"
+                if metrics["sharpe"] > 1
+                else "✅ 擊敗大盤：能創造超額報酬。"
+            )
+        else:
+            metrics["conclusion"] = (
+                "🛡️ 下檔保護：大跌時具備避險作用。"
+                if metrics["mdd"] > -15
+                else "⚠️ 模型失真：容易追高殺低。"
+            )
+        return metrics
     except Exception as e: 
         print(f"回測引擎錯誤: {e}")
         return None
@@ -405,8 +444,6 @@ def _do_analyze(code):
     
     s_score, s_status = analyze_sentiment(news)
     prob = last['AI_P']
-    if s_score > 70: prob += 2
-    elif s_score < 30: prob -= 2
     prob = int(max(0, min(100, prob)))
     
     trend = "多頭" if last['Close'] > last['MA20'] else "空頭"

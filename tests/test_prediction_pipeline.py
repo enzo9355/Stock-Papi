@@ -141,6 +141,71 @@ class PredictionPipelineTests(unittest.TestCase):
         self.assertEqual(result["InstitutionalNet"].tolist(), [1500, 0])
         self.assertEqual(result["MarginBalance"].tolist(), [3000, 3100])
 
+    def test_walk_forward_engine_returns_oos_metrics_and_current_probability(self):
+        x = np.arange(260)
+        close = 100 + x * 0.04 + np.sin(x / 4) * 4
+        raw = pd.DataFrame(
+            {
+                "Open": close - 0.2,
+                "High": close + 0.8,
+                "Low": close - 0.8,
+                "Close": close,
+                "Volume": 1000 + (x % 30) * 20,
+            }
+        )
+        enriched = stock_app.calc_all(raw)
+
+        metrics = stock_app.run_ai_engine(enriched)
+
+        self.assertIsNotNone(metrics)
+        self.assertIn("accuracy", metrics)
+        self.assertIn("brier", metrics)
+        self.assertTrue(0 <= enriched["AI_P"].iloc[-1] <= 100)
+        self.assertGreater(enriched["AI_P"].notna().sum(), 1)
+
+    def test_news_sentiment_does_not_mutate_model_probability(self):
+        index = pd.date_range("2025-01-01", periods=200, freq="B")
+        frame = pd.DataFrame(
+            {
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.0,
+                "MA20": 99.0,
+                "RSI": 55.0,
+                "Volat": 0.02,
+                "MACD_OSC": 0.1,
+                "K": 60.0,
+                "D": 50.0,
+                "AI_P": 55.0,
+            },
+            index=index,
+        )
+        frame.index.name = "Date"
+        backtest = {
+            "days": 30,
+            "accuracy": 50.0,
+            "brier": 0.25,
+            "strat_cum": 0.0,
+            "bh_cum": 0.0,
+            "win_rate": 0.0,
+            "trades": 0,
+            "mdd": 0.0,
+            "sharpe": 0.0,
+            "conclusion": "test",
+            "top_features": ["a", "b", "c"],
+        }
+        with (
+            patch.object(stock_app, "get_data", return_value=frame),
+            patch.object(stock_app, "calc_all", return_value=frame),
+            patch.object(stock_app, "run_ai_engine", return_value=backtest),
+            patch.object(stock_app, "get_news", return_value=[]),
+            patch.object(stock_app, "analyze_sentiment", return_value=(80, "樂觀")),
+        ):
+            result = stock_app._do_analyze("2330")
+
+        self.assertEqual(result["prob"], 55)
+
 
 if __name__ == "__main__":
     unittest.main()
