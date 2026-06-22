@@ -1,7 +1,7 @@
 const bySelector=(selector,root=document)=>root.querySelector(selector);
 
 function setActivePeriod(button){
-  document.querySelectorAll('[data-period]').forEach(item=>item.classList.toggle('active',item===button));
+  document.querySelectorAll('[data-period]').forEach(item=>{item.classList.toggle('active',item===button);item.setAttribute('aria-pressed',item===button)});
   document.documentElement.dataset.period=button.dataset.period;
 }
 
@@ -59,7 +59,7 @@ function setChartRange(days){
 document.addEventListener('click',event=>{
   const range=event.target.closest('[data-chart-range]');
   if(!range)return;
-  document.querySelectorAll('[data-chart-range]').forEach(item=>item.classList.toggle('active',item===range));
+  document.querySelectorAll('[data-chart-range]').forEach(item=>{item.classList.toggle('active',item===range);item.setAttribute('aria-pressed',item===range)});
   setChartRange(Number(range.dataset.chartRange));
 });
 
@@ -166,6 +166,7 @@ function renderLocalPreviews(){
 document.addEventListener('click',event=>{
   if(event.target.closest('[data-watchlist-add]'))addWatchlist();
   if(event.target.closest('[data-alert-open]'))prepareAlertDialog();
+  if(event.target.closest('[data-alert-close]'))bySelector('[data-alert-dialog]')?.close();
   const remove=event.target.closest('[data-watch-remove]');if(remove)removeWatchlist(remove.dataset.watchRemove);
   const removeAlert=event.target.closest('[data-alert-remove]');if(removeAlert){writeStore(STORE.alerts,readStore(STORE.alerts).filter(item=>item.id!==Number(removeAlert.dataset.alertRemove)));renderAlerts();}
 });

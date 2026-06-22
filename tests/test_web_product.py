@@ -1,6 +1,7 @@
 import os
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 os.environ.setdefault("LINE_CHANNEL_ACCESS_TOKEN", "test")
@@ -119,6 +120,16 @@ class WebProductTests(unittest.TestCase):
             card["footer"]["contents"][0]["action"]["uri"],
             "https://example.com/stock/2330",
         )
+
+    def test_web_shell_supports_keyboard_and_mobile_interactions(self):
+        response = stock_app.app.test_client().get("/dashboard")
+        html = response.get_data(as_text=True)
+        css = Path(stock_app.app.static_folder, "app.css").read_text(encoding="utf-8")
+
+        for marker in ['class="skip-link"', 'id="main-content"', 'aria-live="polite"', 'aria-atomic="true"']:
+            self.assertIn(marker, html)
+        for rule in [":focus-visible", "prefers-reduced-motion", "min-height:44px"]:
+            self.assertIn(rule, css)
 
 
 if __name__ == "__main__":

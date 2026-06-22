@@ -5,11 +5,10 @@
 <div class="page" data-dashboard-endpoint="/api/dashboard">
   <header class="page-header">
     <div><p class="eyebrow">MARKET INTELLIGENCE</p><h1>今日決策總覽</h1><p class="muted">先掌握大盤，再決定今天要追蹤什麼。</p></div>
-    <div class="segmented" aria-label="觀察週期"><button class="active" data-period="5d">5日</button><button data-period="20d">20日</button></div>
   </header>
 
   <section class="panel market-panel" aria-labelledby="market-title">
-    <div class="section-heading"><div><p class="eyebrow">MARKET PULSE</p><h2 id="market-title">市場摘要</h2></div><span class="status-dot">更新中</span></div>
+    <div class="section-heading"><div><p class="eyebrow">MARKET PULSE</p><h2 id="market-title">市場摘要</h2></div><span class="status-dot" aria-live="polite">更新中</span></div>
     <div class="market-grid" data-market-summary><div class="skeleton tall"></div><div class="skeleton tall"></div><div class="skeleton tall"></div></div>
   </section>
 

@@ -48,6 +48,17 @@ def sample_analysis_data(news=None):
 
 
 class PredictionPipelineTests(unittest.TestCase):
+    def test_broadcast_endpoint_is_disabled_without_token_configuration(self):
+        previous = stock_app.BROADCAST_TOKEN
+        self.addCleanup(setattr, stock_app, "BROADCAST_TOKEN", previous)
+        stock_app.BROADCAST_TOKEN = None
+
+        with patch.object(stock_app, "analyze") as analyze:
+            response = stock_app.app.test_client().get("/broadcast_weekly")
+
+        self.assertEqual(response.status_code, 503)
+        analyze.assert_not_called()
+
     def test_last_five_rows_have_no_training_target(self):
         frame = pd.DataFrame({"Close": np.arange(1.0, 21.0)})
 

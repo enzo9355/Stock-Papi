@@ -5,6 +5,7 @@
 import os
 import time
 import datetime
+import hmac
 from html import escape
 import requests
 import pandas as pd
@@ -34,7 +35,7 @@ FINMIND_USER = os.getenv("FINMIND_USER")
 FINMIND_PASSWORD = os.getenv("FINMIND_PASSWORD")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 LOCAL_HOST = os.getenv("HOST", "127.0.0.1")
-BROADCAST_TOKEN = os.getenv("BROADCAST_TOKEN", "default_secret")
+BROADCAST_TOKEN = os.getenv("BROADCAST_TOKEN")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 1_000_000
@@ -47,7 +48,7 @@ if GEMINI_API_KEY:
 else:
     gemini_model = None
 
-finmind_token = ""
+finmind_token = None
 CATEGORY_PAGE_SIZE = 12
 PREDICTION_HORIZON = 5
 ROUND_TRIP_COST = 0.00585
@@ -74,7 +75,8 @@ def finmind_login():
             timeout=5
         ).json()
         if r.get("msg") == "success": finmind_token = r["token"]
-    except: pass
+    except (requests.RequestException, KeyError, TypeError, ValueError):
+        return
 
 def fetch_finmind_dataset(dataset, code, start_date, end_date):
     finmind_login()
@@ -678,7 +680,10 @@ def build_category_quick_reply(page=1):
 # ==================================================
 @app.route("/broadcast_weekly", methods=["GET"])
 def broadcast_weekly():
-    if request.args.get("token") != BROADCAST_TOKEN: return "身份驗證失敗", 403
+    if not BROADCAST_TOKEN:
+        return "廣播功能未設定", 503
+    if not hmac.compare_digest(request.args.get("token", ""), BROADCAST_TOKEN):
+        return "身份驗證失敗", 403
     d = analyze("TAIEX")
     if not d: return "分析失敗", 500
     
