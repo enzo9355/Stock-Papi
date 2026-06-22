@@ -3,6 +3,7 @@
 # --------------------------------------------------
 
 import os
+import re
 import time
 import datetime
 import hmac
@@ -22,8 +23,12 @@ from flask import Flask, request, abort, render_template, jsonify
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
-    MessageEvent, TextMessage, TextSendMessage, FlexSendMessage,
+    MessageEvent, PostbackEvent, TextMessage, TextSendMessage, FlexSendMessage,
     QuickReply, QuickReplyButton, MessageAction
+)
+from line_state import (
+    FirestoreStore, StateError, StoreError, add_alert, add_watch,
+    consume_pending, remove_watch, start_pending,
 )
 
 # ==================================================
@@ -34,6 +39,7 @@ LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 FINMIND_USER = os.getenv("FINMIND_USER")
 FINMIND_PASSWORD = os.getenv("FINMIND_PASSWORD")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 LOCAL_HOST = os.getenv("HOST", "127.0.0.1")
 BROADCAST_TOKEN = os.getenv("BROADCAST_TOKEN")
 
@@ -41,6 +47,7 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 1_000_000
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
+line_store = FirestoreStore(GCP_PROJECT_ID) if GCP_PROJECT_ID else None
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -700,7 +707,25 @@ def broadcast_weekly():
 # ==================================================
 # 8. 路由與 LINE 基礎指令 (💡 確保名稱不重複版)
 # ==================================================
-def build_stock_flex_message(code, name, data, url):
+def get_line_state(user_id):
+    if line_store is None:
+        raise StoreError("關注功能尚未設定")
+    return line_store.load(user_id)[0]
+
+
+def update_line_state(user_id, mutate):
+    if line_store is None:
+        raise StoreError("關注功能尚未設定")
+    return line_store.update(user_id, mutate)
+
+
+def _store_error_text():
+    if line_store is None:
+        return "關注功能尚未設定，請稍後再試。"
+    return "關注功能暫時無法使用，請稍後再試。"
+
+
+def build_stock_flex_message(code, name, data, url, watched=False):
     color_prob = "#10b981" if data['prob'] >= 50 else "#ef4444"
     color_s = "#10b981" if data['s_score'] >= 50 else "#ef4444"
     color_trend = "#10b981" if "多" in data['trend'] else "#ef4444"
@@ -771,19 +796,176 @@ def build_stock_flex_message(code, name, data, url):
             "layout": "vertical",
             "backgroundColor": "#f8fafc",
             "paddingAll": "16px",
+            "spacing": "sm",
             "contents": [
                 {
                     "type": "button",
+                    "style": "secondary",
+                    "action": {
+                        "type": "postback",
+                        "label": "移除關注" if watched else "加入關注",
+                        "data": f"watch:{'remove' if watched else 'add'}:{code}",
+                    }
+                },
+                {
+                    "type": "button",
+                    "style": "secondary",
+                    "action": {
+                        "type": "postback",
+                        "label": "設定提醒",
+                        "data": f"alert:menu:{code}",
+                    }
+                },
+                {
+                    "type": "button",
                     "style": "primary",
-                    "color": "#0284c7",
+                    "color": "#39c6a3",
                     "action": {
                         "type": "uri",
-                        "label": "📈 查看圖表與回測報告",
-                        "uri": url
+                        "label": "查看完整分析",
+                        "uri": url,
                     }
                 }
             ]
         }
+    }
+
+
+def _empty_line_bubble(title, description):
+    return {
+        "type": "bubble",
+        "size": "kilo",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "paddingAll": "20px",
+            "spacing": "md",
+            "contents": [
+                {"type": "text", "text": title, "weight": "bold", "size": "lg", "wrap": True},
+                {"type": "text", "text": description, "color": "#64748b", "size": "sm", "wrap": True},
+            ],
+        },
+    }
+
+
+def _watchlist_card(item, snapshot, base_url):
+    code = item["code"]
+    name = item["name"]
+    if snapshot:
+        details = [
+            f"收盤價 {snapshot['price']:.2f}",
+            f"五日上漲機率 {snapshot['prob']}%",
+            f"趨勢 {snapshot['trend']}",
+            f"資料日期 {snapshot['as_of']}",
+        ]
+    else:
+        details = ["待收盤更新"]
+    return {
+        "type": "bubble",
+        "size": "kilo",
+        "body": {
+            "type": "box", "layout": "vertical", "paddingAll": "18px", "spacing": "sm",
+            "contents": [
+                {"type": "text", "text": f"{name} ({code})", "weight": "bold", "size": "lg", "wrap": True},
+                *[
+                    {"type": "text", "text": detail, "color": "#64748b", "size": "sm", "wrap": True}
+                    for detail in details
+                ],
+            ],
+        },
+        "footer": {
+            "type": "box", "layout": "vertical", "paddingAll": "14px", "spacing": "sm",
+            "contents": [
+                {"type": "button", "style": "secondary", "action": {
+                    "type": "postback", "label": "移除關注", "data": f"watch:remove:{code}",
+                }},
+                {"type": "button", "style": "secondary", "action": {
+                    "type": "postback", "label": "設定提醒", "data": f"alert:menu:{code}",
+                }},
+                {"type": "button", "style": "primary", "color": "#39c6a3", "action": {
+                    "type": "uri", "label": "查看完整分析",
+                    "uri": f"{base_url.rstrip('/')}/stock/{code}",
+                }},
+            ],
+        },
+    }
+
+
+def build_watchlist_flex(state, base_url):
+    watchlist = state.get("watchlist", [])[:12]
+    if not watchlist:
+        return _empty_line_bubble("我的關注", "尚未加入關注股票。請先查詢個股，再點選「加入關注」。")
+    snapshots = {
+        item.get("code"): item
+        for item in state.get("signals", {}).get("items", [])
+        if isinstance(item, dict)
+    }
+    return {
+        "type": "carousel",
+        "contents": [
+            _watchlist_card(item, snapshots.get(item.get("code")), base_url)
+            for item in watchlist
+        ],
+    }
+
+
+def build_alert_menu_flex(code, name):
+    choices = [
+        ("收盤價門檻", f"alert:start:{code}:price"),
+        ("機率門檻", f"alert:start:{code}:probability"),
+        ("趨勢轉多", f"alert:trend:{code}:多頭"),
+        ("趨勢轉空", f"alert:trend:{code}:空頭"),
+    ]
+    return {
+        "type": "bubble",
+        "size": "kilo",
+        "body": {
+            "type": "box", "layout": "vertical", "paddingAll": "18px", "spacing": "sm",
+            "contents": [
+                {"type": "text", "text": f"設定 {name} ({code}) 提醒", "weight": "bold", "size": "lg", "wrap": True},
+                *[
+                    {"type": "button", "style": "secondary", "action": {
+                        "type": "postback", "label": label, "data": payload,
+                    }}
+                    for label, payload in choices
+                ],
+            ],
+        },
+    }
+
+
+def _signal_card(item, base_url):
+    code = item["code"]
+    return {
+        "type": "bubble",
+        "size": "kilo",
+        "body": {
+            "type": "box", "layout": "vertical", "paddingAll": "18px", "spacing": "sm",
+            "contents": [
+                {"type": "text", "text": f"{item['name']} ({code})", "weight": "bold", "size": "lg", "wrap": True},
+                {"type": "text", "text": f"收盤價 {item['price']:.2f}", "color": "#64748b", "size": "sm"},
+                {"type": "text", "text": f"五日上漲機率 {item['prob']}%", "color": "#64748b", "size": "sm"},
+                {"type": "text", "text": f"趨勢 {item['trend']}", "color": "#64748b", "size": "sm"},
+                {"type": "text", "text": f"資料日期 {item['as_of']}", "color": "#64748b", "size": "sm"},
+            ],
+        },
+        "footer": {
+            "type": "box", "layout": "vertical", "paddingAll": "14px",
+            "contents": [{"type": "button", "style": "primary", "color": "#39c6a3", "action": {
+                "type": "uri", "label": "查看完整分析",
+                "uri": f"{base_url.rstrip('/')}/stock/{code}",
+            }}],
+        },
+    }
+
+
+def build_strong_signals_flex(state, base_url):
+    items = state.get("signals", {}).get("items", [])[:5]
+    if not items:
+        return _empty_line_bubble("強勢訊號", "尚無最新強勢訊號，請等待下一次收盤更新。")
+    return {
+        "type": "carousel",
+        "contents": [_signal_card(item, base_url) for item in items],
     }
 
 def build_line_summary_card(title, lines, cta_label, url, accent="#39c6a3"):
@@ -1027,10 +1209,153 @@ def callback():
     except InvalidSignatureError: abort(400)
     return "OK"
 
+
+def _reply_text(event, text):
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
+
+
+def _resolve_postback_stock(code):
+    resolved_code, name = search_stock_code(code)
+    if (
+        resolved_code != code
+        or not name
+        or (name == code and code != "TAIEX")
+    ):
+        return None, None
+    return resolved_code, name
+
+
+@handler.add(PostbackEvent)
+def handle_postback(event):
+    user_id = getattr(getattr(event, "source", None), "user_id", None)
+    if not user_id:
+        _reply_text(event, "無法識別 LINE 使用者，請從一對一聊天室操作。")
+        return
+
+    payload = getattr(getattr(event, "postback", None), "data", "")
+    stock_match = re.fullmatch(
+        r"(?:watch:(?:add|remove)|alert:menu):([A-Za-z0-9]+)",
+        payload,
+    )
+    alert_start_match = re.fullmatch(
+        r"alert:start:([A-Za-z0-9]+):(price|probability)",
+        payload,
+    )
+    alert_trend_match = re.fullmatch(
+        r"alert:trend:([A-Za-z0-9]+):(多頭|空頭)",
+        payload,
+    )
+    alert_remove_match = re.fullmatch(r"alert:remove:([0-9a-fA-F]{32})", payload)
+
+    if not any((stock_match, alert_start_match, alert_trend_match, alert_remove_match)):
+        _reply_text(event, "無效的操作，請重新開啟功能選單。")
+        return
+
+    if alert_remove_match:
+        alert_id = alert_remove_match.group(1)
+        found = {"value": False}
+
+        def delete_alert(state):
+            alerts = state.get("alerts", [])
+            found["value"] = any(item.get("id") == alert_id for item in alerts)
+            state["alerts"] = [item for item in alerts if item.get("id") != alert_id]
+
+        try:
+            update_line_state(user_id, delete_alert)
+            _reply_text(event, "提醒已移除。" if found["value"] else "找不到這筆提醒，可能已經移除。")
+        except StoreError:
+            _reply_text(event, _store_error_text())
+        return
+
+    match = stock_match or alert_start_match or alert_trend_match
+    code, name = _resolve_postback_stock(match.group(1))
+    if not code:
+        _reply_text(event, "找不到這檔股票，請重新查詢後再操作。")
+        return
+
+    if payload == f"alert:menu:{code}":
+        line_bot_api.reply_message(
+            event.reply_token,
+            FlexSendMessage(
+                alt_text=f"設定 {name} 提醒",
+                contents=build_alert_menu_flex(code, name),
+            ),
+        )
+        return
+
+    try:
+        if payload == f"watch:add:{code}":
+            update_line_state(user_id, lambda state: add_watch(state, code, name))
+            reply = f"已將 {name} ({code}) 加入關注。"
+        elif payload == f"watch:remove:{code}":
+            update_line_state(user_id, lambda state: remove_watch(state, code))
+            reply = f"已將 {name} ({code}) 移除關注，相關提醒也已移除。"
+        elif alert_start_match:
+            kind = alert_start_match.group(2)
+
+            def begin_alert(state):
+                add_watch(state, code, name)
+                start_pending(state, code, name, kind)
+
+            update_line_state(user_id, begin_alert)
+            label = "收盤價" if kind == "price" else "五日上漲機率（1 到 99）"
+            reply = f"請輸入 {name} 的{label}門檻數字，或輸入「取消」。"
+        elif alert_trend_match:
+            trend = alert_trend_match.group(2)
+
+            def create_trend_alert(state):
+                add_watch(state, code, name)
+                add_alert(state, code, name, "trend", trend)
+
+            update_line_state(user_id, create_trend_alert)
+            reply = f"已建立 {name} 趨勢轉為{trend}時的提醒。"
+        else:
+            _reply_text(event, "無效的操作，請重新開啟功能選單。")
+            return
+        _reply_text(event, reply)
+    except StateError as error:
+        _reply_text(event, str(error))
+    except StoreError:
+        _reply_text(event, _store_error_text())
+
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     msg = event.message.text.strip()
     web_root = request.host_url.replace("http://", "https://").rstrip("/")
+    user_id = getattr(getattr(event, "source", None), "user_id", None)
+    current_state = None
+    state_load_failed = False
+
+    if line_store is not None and user_id:
+        try:
+            current_state = get_line_state(user_id)
+        except StoreError:
+            state_load_failed = True
+
+    if current_state and current_state.get("pending"):
+        try:
+            if msg == "取消":
+                def cancel_pending(state):
+                    state["pending"] = None
+
+                update_line_state(user_id, cancel_pending)
+                _reply_text(event, "已取消提醒設定。")
+            else:
+                created = {"alert": None}
+
+                def finish_pending(state):
+                    created["alert"] = consume_pending(state, msg)
+
+                update_line_state(user_id, finish_pending)
+                alert = created["alert"]
+                label = "收盤價" if alert["kind"] == "price" else "五日上漲機率"
+                _reply_text(event, f"已建立 {alert['name']} 的{label}提醒。")
+        except StateError as error:
+            _reply_text(event, str(error))
+        except StoreError:
+            _reply_text(event, _store_error_text())
+        return
 
     if msg in ("大盤預測", "大盤", "今日盤勢"):
         data = analyze("TAIEX")
@@ -1046,8 +1371,36 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="請選擇產業板塊", contents=build_welcome_flex(), quick_reply=qr))
 
     elif msg == "我的關注":
-        card = build_line_summary_card("我的關注", ["查看自選股票、提醒規則與最近觸發紀錄。"], "開啟關注清單", f"{web_root}/watchlist")
-        line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="開啟我的關注", contents=card))
+        if line_store is None:
+            _reply_text(event, _store_error_text())
+        elif not user_id:
+            _reply_text(event, "無法識別 LINE 使用者，請從一對一聊天室操作。")
+        elif state_load_failed:
+            _reply_text(event, _store_error_text())
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                FlexSendMessage(
+                    alt_text="我的關注",
+                    contents=build_watchlist_flex(current_state, web_root),
+                ),
+            )
+
+    elif msg == "強勢訊號":
+        if line_store is None:
+            _reply_text(event, _store_error_text())
+        elif not user_id:
+            _reply_text(event, "無法識別 LINE 使用者，請從一對一聊天室操作。")
+        elif state_load_failed:
+            _reply_text(event, _store_error_text())
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                FlexSendMessage(
+                    alt_text="強勢訊號",
+                    contents=build_strong_signals_flex(current_state, web_root),
+                ),
+            )
 
     elif msg == "完整分析":
         card = build_line_summary_card("量化分析總覽", ["從市場摘要、強勢訊號與產業雷達開始判讀。"], "開啟完整分析", f"{web_root}/dashboard")
@@ -1089,7 +1442,11 @@ def handle_message(event):
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無資料，請稍後再試。"))
                 return
             url = f"{request.host_url}stock/{code}".replace("http://", "https://")
-            flex_content = build_stock_flex_message(code, name, data, url)
+            watched = bool(
+                current_state
+                and any(item.get("code") == code for item in current_state.get("watchlist", []))
+            )
+            flex_content = build_stock_flex_message(code, name, data, url, watched=watched)
             line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text=f"📊 {name} ({code}) 預測出爐，點擊查看！", contents=flex_content))
         else:
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請輸入股票代碼，或輸入：今日盤勢 / 熱門產業 / 我的關注 / 完整分析"))
