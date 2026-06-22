@@ -1,17 +1,207 @@
 import copy
+import json
 import math
 import time
 import uuid
 from datetime import date
+from urllib.parse import quote, unquote
+
+import requests
 
 
 MAX_WATCHLIST = 12
 MAX_ALERTS = 20
 PENDING_SECONDS = 600
+METADATA_TOKEN_URL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
 
 
 class StateError(ValueError):
     pass
+
+
+class StoreError(RuntimeError):
+    pass
+
+
+class StoreConflict(StoreError):
+    pass
+
+
+class FirestoreStore:
+    def __init__(self, project_id, session=None, token_provider=None):
+        if not isinstance(project_id, str) or not project_id.strip():
+            raise ValueError("project_id must be non-empty")
+        self.project_id = project_id.strip()
+        self.session = session if session is not None else requests.Session()
+        self.token_provider = token_provider if token_provider is not None else self._access_token
+        self._cached_token = None
+        self._token_expires_at = 0
+
+    @property
+    def collection_url(self):
+        return (
+            "https://firestore.googleapis.com/v1/projects/"
+            f"{self.project_id}/databases/(default)/documents/line_users"
+        )
+
+    def _access_token(self):
+        now = time.time()
+        if self._cached_token and now < self._token_expires_at:
+            return self._cached_token
+
+        try:
+            response = self.session.get(
+                METADATA_TOKEN_URL,
+                headers={"Metadata-Flavor": "Google"},
+                timeout=3,
+            )
+            if response.status_code != 200:
+                raise ValueError("metadata status")
+            payload = response.json()
+            token = payload["access_token"]
+            expires_in = payload["expires_in"]
+            if (
+                not isinstance(token, str)
+                or not token
+                or isinstance(expires_in, bool)
+                or not isinstance(expires_in, (int, float))
+                or expires_in <= 0
+            ):
+                raise ValueError("metadata fields")
+        except Exception:
+            raise StoreError("Metadata token request failed") from None
+
+        self._cached_token = token
+        self._token_expires_at = now + max(0, expires_in - 60)
+        return token
+
+    def _headers(self):
+        try:
+            token = self.token_provider()
+            if not isinstance(token, str) or not token:
+                raise ValueError("invalid token")
+        except StoreError:
+            raise
+        except Exception:
+            raise StoreError("Access token provider failed") from None
+        return {"Authorization": f"Bearer {token}"}
+
+    def _request(self, method, url, timeout, **kwargs):
+        try:
+            return self.session.request(
+                method,
+                url,
+                headers=self._headers(),
+                timeout=timeout,
+                **kwargs,
+            )
+        except StoreError:
+            raise
+        except Exception:
+            raise StoreError("Firestore request failed") from None
+
+    @staticmethod
+    def _document_state(document):
+        try:
+            raw_state = document.get("fields", {}).get("state", {}).get("stringValue", "{}")
+            return normalize_state(json.loads(raw_state))
+        except (AttributeError, TypeError, ValueError):
+            return empty_state()
+
+    def _document_url(self, user_id):
+        return f"{self.collection_url}/{quote(user_id, safe='')}"
+
+    def load(self, user_id):
+        response = self._request("GET", self._document_url(user_id), timeout=5)
+        if response.status_code == 404:
+            return empty_state(), None
+        if response.status_code != 200:
+            raise StoreError(f"Firestore read failed with status {response.status_code}")
+        try:
+            document = response.json()
+            update_time = document.get("updateTime")
+        except Exception:
+            raise StoreError("Firestore read response was invalid") from None
+        return self._document_state(document), update_time
+
+    def save(self, user_id, state, update_time):
+        params = {"updateMask.fieldPaths": "state"}
+        if update_time:
+            params["currentDocument.updateTime"] = update_time
+        else:
+            params["currentDocument.exists"] = "false"
+        serialized = json.dumps(
+            normalize_state(state),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        body = {"fields": {"state": {"stringValue": serialized}}}
+        response = self._request(
+            "PATCH",
+            self._document_url(user_id),
+            timeout=5,
+            params=params,
+            json=body,
+        )
+        if response.status_code in {409, 412}:
+            raise StoreConflict("Firestore write conflict")
+        if response.status_code != 200:
+            raise StoreError(f"Firestore write failed with status {response.status_code}")
+        try:
+            update_time = response.json()["updateTime"]
+            if not isinstance(update_time, str) or not update_time:
+                raise ValueError("invalid updateTime")
+            return update_time
+        except Exception:
+            raise StoreError("Firestore write response was invalid") from None
+
+    def update(self, user_id, mutate):
+        for attempt in range(2):
+            state, update_time = self.load(user_id)
+            mutated = mutate(state)
+            if mutated is not None:
+                state = mutated
+            try:
+                self.save(user_id, state, update_time)
+                return state
+            except StoreConflict:
+                if attempt == 1:
+                    raise
+        raise StoreConflict("Firestore write conflict")
+
+    def iter_users(self):
+        page_token = None
+        while True:
+            params = {"pageSize": 100}
+            if page_token:
+                params["pageToken"] = page_token
+            response = self._request(
+                "GET",
+                self.collection_url,
+                timeout=10,
+                params=params,
+            )
+            if response.status_code != 200:
+                raise StoreError(f"Firestore list failed with status {response.status_code}")
+            try:
+                payload = response.json()
+                documents = payload.get("documents", [])
+                page_token = payload.get("nextPageToken")
+                if not isinstance(documents, list):
+                    raise ValueError("invalid documents")
+            except Exception:
+                raise StoreError("Firestore list response was invalid") from None
+
+            for document in documents:
+                try:
+                    user_id = unquote(document["name"].rsplit("/", 1)[-1])
+                    update_time = document.get("updateTime")
+                except Exception:
+                    raise StoreError("Firestore document was invalid") from None
+                yield user_id, self._document_state(document), update_time
+
+            if not page_token:
+                return
 
 
 def _is_valid_code(code):
