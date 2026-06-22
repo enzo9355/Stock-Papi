@@ -30,7 +30,7 @@ from linebot.models import (
 )
 from line_state import (
     FirestoreStore, StateError, StoreError, add_alert, add_watch,
-    consume_pending, remove_watch, start_pending,
+    consume_pending, evaluate_alert, remove_watch, start_pending, top_signals,
 )
 
 # ==================================================
@@ -44,6 +44,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 LOCAL_HOST = os.getenv("HOST", "127.0.0.1")
 BROADCAST_TOKEN = os.getenv("BROADCAST_TOKEN")
+ALERT_TASK_TOKEN = os.getenv("ALERT_TASK_TOKEN")
 LINE_STATE_READ_BUDGET_SECONDS = 0.25
 LINE_STATE_READ_MAX_WORKERS = 4
 _line_state_read_slots = threading.BoundedSemaphore(LINE_STATE_READ_MAX_WORKERS)
@@ -485,7 +486,8 @@ def _do_analyze(code):
         pred.append({'time': curr_d.strftime('%Y-%m-%d'), 'value': round(curr_p, 2)})
 
     return {
-        "code": code, "name": name, "price": last['Close'], "prob": prob, 
+        "code": code, "name": name, "price": last['Close'], "prob": prob,
+        "as_of": df.index[-1].date().isoformat(),
         "bt": bt, "news": news, "trend": trend,
         "rsi": last['RSI'], "ma20": last['MA20'],
         "macd_osc": last['MACD_OSC'], "k": last['K'], "d": last['D'],
@@ -1012,6 +1014,123 @@ def build_strong_signals_flex(state, base_url):
         "contents": [_signal_card(item, base_url) for item in items],
     }
 
+
+def build_alert_push_flex(hits, base_url):
+    if not 1 <= len(hits) <= 12:
+        raise ValueError("LINE Flex carousel requires 1 to 12 bubbles")
+
+    def bubble(hit):
+        alert, quote = hit["alert"], hit["quote"]
+        if alert["kind"] == "price":
+            condition = f"條件：股價達到 {float(alert['value']):g}"
+            current = f"目前股價：{quote['price']:.2f}"
+        elif alert["kind"] == "probability":
+            condition = f"條件：五日上漲機率達到 {float(alert['value']):g}%"
+            current = f"目前機率：{quote['prob']}%"
+        else:
+            condition = f"條件：趨勢轉為{alert['value']}"
+            current = f"目前趨勢：{quote['trend']}"
+        return {
+            "type": "bubble", "size": "kilo",
+            "header": {
+                "type": "box", "layout": "vertical", "backgroundColor": "#081321",
+                "paddingAll": "16px", "contents": [{
+                    "type": "text", "text": "🔔 股票提醒", "color": "#39c6a3",
+                    "weight": "bold", "size": "sm",
+                }],
+            },
+            "body": {
+                "type": "box", "layout": "vertical", "paddingAll": "18px", "spacing": "sm",
+                "contents": [
+                    {"type": "text", "text": f"{quote['name']} ({quote['code']})", "weight": "bold", "size": "lg", "wrap": True},
+                    {"type": "text", "text": condition, "size": "sm", "color": "#64748b", "wrap": True},
+                    {"type": "text", "text": current, "size": "sm", "color": "#0f766e", "weight": "bold", "wrap": True},
+                    {"type": "text", "text": f"資料日期：{quote['as_of']}", "size": "xs", "color": "#94a3b8"},
+                ],
+            },
+            "footer": {
+                "type": "box", "layout": "vertical", "paddingAll": "14px",
+                "contents": [{"type": "button", "style": "primary", "color": "#39c6a3", "action": {
+                    "type": "uri", "label": "查看完整分析",
+                    "uri": f"{base_url.rstrip('/')}/stock/{quote['code']}",
+                }}],
+            },
+        }
+
+    return {"type": "carousel", "contents": [bubble(hit) for hit in hits]}
+
+
+def run_alert_checks(store, analyze_fn, push_fn, today, base_url):
+    users = list(store.iter_users())
+    codes = list(dict.fromkeys(
+        item["code"]
+        for _, state, _ in users
+        for item in state.get("watchlist", [])
+        if isinstance(item, dict) and item.get("code")
+    ))
+    quotes = {}
+    for code in codes:
+        try:
+            data = analyze_fn(code)
+            if not data or not isinstance(data.get("as_of"), str):
+                continue
+            datetime.date.fromisoformat(data["as_of"])
+            quotes[code] = {
+                "code": code, "name": data["name"], "price": float(data["price"]),
+                "prob": int(data["prob"]), "trend": data["trend"], "as_of": data["as_of"],
+            }
+        except Exception:
+            continue
+
+    for user_id, observed, _ in users:
+        watched = [
+            quotes[item["code"]] for item in observed.get("watchlist", [])
+            if isinstance(item, dict) and item.get("code") in quotes
+        ]
+        if not watched:
+            continue
+        latest_as_of = max(item["as_of"] for item in watched)
+        stored_as_of = observed.get("signals", {}).get("as_of")
+        if stored_as_of and latest_as_of <= stored_as_of:
+            continue
+
+        signal_items = top_signals(watched)
+        hits = []
+        for alert in observed.get("alerts", []):
+            quote = quotes.get(alert.get("code"))
+            if (
+                not alert.get("enabled")
+                or alert.get("last_triggered_date") == today
+                or quote is None
+            ):
+                continue
+            try:
+                if evaluate_alert(alert, quote):
+                    hits.append({"alert": alert, "quote": quote})
+            except (KeyError, TypeError, ValueError):
+                continue
+
+        if hits:
+            messages = [
+                build_alert_push_flex(hits[start:start + 12], base_url)
+                for start in range(0, len(hits), 12)
+            ]
+            push_fn(user_id, messages[0] if len(messages) == 1 else messages)
+        triggered_ids = {hit["alert"]["id"] for hit in hits}
+
+        def merge_scheduler_fields(state):
+            current_as_of = state.get("signals", {}).get("as_of")
+            if not current_as_of or current_as_of < latest_as_of:
+                state["signals"] = {
+                    "as_of": latest_as_of,
+                    "items": [dict(item) for item in signal_items],
+                }
+            for alert in state.get("alerts", []):
+                if alert.get("id") in triggered_ids:
+                    alert["last_triggered_date"] = today
+
+        store.update(user_id, merge_scheduler_fields)
+
 def build_line_summary_card(title, lines, cta_label, url, accent="#39c6a3"):
     """建立只有一個 Web CTA 的 LINE 摘要卡。"""
     return {
@@ -1252,6 +1371,39 @@ def callback():
     try: handler.handle(request.get_data(as_text=True), request.headers.get("X-Line-Signature", ""))
     except InvalidSignatureError: abort(400)
     return "OK"
+
+
+@app.route("/tasks/check-alerts", methods=["POST"])
+def check_alerts_task():
+    if not ALERT_TASK_TOKEN:
+        return "提醒排程尚未設定", 503
+    if not hmac.compare_digest(
+        request.headers.get("Authorization", ""),
+        f"Bearer {ALERT_TASK_TOKEN}",
+    ):
+        return "身份驗證失敗", 403
+    if line_store is None:
+        return "關注功能尚未設定", 503
+
+    def push(user_id, contents):
+        messages = contents if isinstance(contents, list) else [contents]
+        messages = [
+            FlexSendMessage(alt_text="股票提醒已觸發", contents=message)
+            for message in messages
+        ]
+        line_bot_api.push_message(user_id, messages[0] if len(messages) == 1 else messages)
+
+    try:
+        run_alert_checks(
+            line_store,
+            analyze,
+            push,
+            datetime.date.today().isoformat(),
+            request.host_url.replace("http://", "https://").rstrip("/"),
+        )
+    except Exception:
+        return "提醒排程執行失敗", 500
+    return "提醒排程執行完成", 200
 
 
 def _reply_text(event, text):

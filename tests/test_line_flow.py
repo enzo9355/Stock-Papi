@@ -138,6 +138,42 @@ class BaseExceptionReadStore:
         return True
 
 
+class SchedulerStore:
+    def __init__(self, users, before_update=None):
+        self.users = copy.deepcopy(users)
+        self.before_update = before_update
+        self.iter_calls = 0
+        self.update_calls = []
+
+    def iter_users(self):
+        self.iter_calls += 1
+        for user_id, state in self.users.items():
+            yield user_id, copy.deepcopy(state), "v1"
+
+    def update(self, user_id, mutate):
+        self.update_calls.append(user_id)
+        if self.before_update:
+            self.before_update(self.users[user_id])
+            self.before_update = None
+        mutate(self.users[user_id])
+        return copy.deepcopy(self.users[user_id])
+
+
+def scheduler_state(code="2330", name="台積電"):
+    state = empty_state()
+    state["watchlist"] = [{"code": code, "name": name, "added_at": 1}]
+    return state
+
+
+def scheduler_quote(code="2330", name="台積電", **changes):
+    quote = {
+        "code": code, "name": name, "price": 1000.0,
+        "prob": 70, "trend": "多頭", "as_of": "2026-06-22",
+    }
+    quote.update(changes)
+    return quote
+
+
 class LineBuilderTests(unittest.TestCase):
     def test_stock_flex_has_two_postbacks_and_one_analysis_uri(self):
         card = stock_app.build_stock_flex_message(
@@ -604,6 +640,301 @@ class MessageFlowTests(unittest.TestCase):
                 contents = contents.as_json_dict()
             action = contents["footer"]["contents"][0]["action"]
             self.assertEqual(action["data"], expected)
+
+
+class ScheduledAlertTests(unittest.TestCase):
+    def alert(self, alert_id, kind, value, **changes):
+        alert = {
+            "id": alert_id, "code": "2330", "name": "台積電",
+            "kind": kind, "value": value, "enabled": True,
+            "last_triggered_date": None,
+        }
+        alert.update(changes)
+        return alert
+
+    def test_analyzes_each_code_once_and_pushes_personalized_results(self):
+        first = scheduler_state()
+        first["watchlist"].append({"code": "2317", "name": "鴻海", "added_at": 2})
+        first["alerts"] = [self.alert("a" * 32, "price", 900)]
+        second = scheduler_state("2317", "鴻海")
+        second["alerts"] = [self.alert(
+            "b" * 32, "trend", "多頭", code="2317", name="鴻海",
+        )]
+        store = SchedulerStore({"U1": first, "U2": second})
+        quotes = {
+            "2330": scheduler_quote(),
+            "2317": scheduler_quote("2317", "鴻海", price=210.0, prob=60),
+        }
+        analyze_calls = []
+        pushes = []
+
+        stock_app.run_alert_checks(
+            store,
+            lambda code: analyze_calls.append(code) or copy.deepcopy(quotes[code]),
+            lambda user_id, contents: pushes.append((user_id, contents)),
+            "2026-06-23",
+            "https://example.com",
+        )
+
+        self.assertEqual(store.iter_calls, 1)
+        self.assertEqual(sorted(analyze_calls), ["2317", "2330"])
+        self.assertEqual(len(analyze_calls), 2)
+        self.assertEqual([user_id for user_id, _ in pushes], ["U1", "U2"])
+        self.assertEqual(
+            [item["code"] for item in store.users["U1"]["signals"]["items"]],
+            ["2330", "2317"],
+        )
+        self.assertEqual(
+            [item["code"] for item in store.users["U2"]["signals"]["items"]],
+            ["2317"],
+        )
+
+    def test_stale_or_missing_as_of_does_not_push_or_update(self):
+        stale = scheduler_state()
+        stale["signals"] = {"as_of": "2026-06-22", "items": []}
+        stale["alerts"] = [self.alert("a" * 32, "price", 1)]
+        pushes = []
+
+        missing_store = SchedulerStore({"missing": scheduler_state()})
+        stock_app.run_alert_checks(
+            missing_store,
+            lambda code: scheduler_quote(as_of=None),
+            lambda *args: pushes.append(args),
+            "2026-06-23",
+            "https://example.com",
+        )
+        self.assertEqual(pushes, [])
+        self.assertEqual(missing_store.update_calls, [])
+
+        stale_store = SchedulerStore({"stale": stale})
+        stock_app.run_alert_checks(
+            stale_store,
+            lambda code: scheduler_quote(as_of="2026-06-22"),
+            lambda *args: pushes.append(args),
+            "2026-06-23",
+            "https://example.com",
+        )
+        self.assertEqual(pushes, [])
+        self.assertEqual(stale_store.update_calls, [])
+
+    def test_analysis_failure_or_none_is_skipped(self):
+        for failure in (None, RuntimeError("行情失敗")):
+            with self.subTest(failure=failure):
+                store = SchedulerStore({"U1": scheduler_state()})
+                pushes = []
+
+                def analyze(code):
+                    if failure:
+                        raise failure
+                    return None
+
+                stock_app.run_alert_checks(
+                    store, analyze, lambda *args: pushes.append(args),
+                    "2026-06-23", "https://example.com",
+                )
+
+                self.assertEqual(pushes, [])
+                self.assertEqual(store.update_calls, [])
+
+    def test_push_failure_does_not_mark_or_update(self):
+        state = scheduler_state()
+        state["alerts"] = [self.alert("a" * 32, "price", 1)]
+        store = SchedulerStore({"U1": state})
+
+        with self.assertRaisesRegex(RuntimeError, "push failed"):
+            stock_app.run_alert_checks(
+                store,
+                lambda code: scheduler_quote(),
+                lambda *args: (_ for _ in ()).throw(RuntimeError("push failed")),
+                "2026-06-23",
+                "https://example.com",
+            )
+
+        self.assertEqual(store.update_calls, [])
+        self.assertIsNone(store.users["U1"]["alerts"][0]["last_triggered_date"])
+        self.assertIsNone(store.users["U1"]["signals"]["as_of"])
+
+    def test_alert_kinds_disabled_and_daily_deduplication(self):
+        state = scheduler_state()
+        state["alerts"] = [
+            self.alert("1" * 32, "price", 900),
+            self.alert("2" * 32, "probability", 65),
+            self.alert("3" * 32, "trend", "多頭"),
+            self.alert("4" * 32, "trend", "空頭"),
+            self.alert("5" * 32, "price", 1, enabled=False),
+            self.alert("6" * 32, "price", 1, last_triggered_date="2026-06-23"),
+        ]
+        store = SchedulerStore({"U1": state})
+        pushes = []
+
+        stock_app.run_alert_checks(
+            store, lambda code: scheduler_quote(trend="空頭"),
+            lambda user_id, contents: pushes.append(contents),
+            "2026-06-23", "https://example.com",
+        )
+
+        self.assertEqual(len(pushes), 1)
+        self.assertEqual(len(pushes[0]["contents"]), 3)
+        marked = {
+            alert["id"] for alert in store.users["U1"]["alerts"]
+            if alert["last_triggered_date"] == "2026-06-23"
+        }
+        self.assertEqual(marked, {"1" * 32, "2" * 32, "4" * 32, "6" * 32})
+
+    def test_update_merges_only_scheduler_owned_fields(self):
+        observed = scheduler_state()
+        observed["alerts"] = [self.alert("a" * 32, "price", 1)]
+
+        def user_changes(latest):
+            latest["watchlist"] = [{"code": "2317", "name": "鴻海", "added_at": 2}]
+            latest["pending"] = {
+                "code": "2317", "name": "鴻海", "kind": "price", "expires_at": 9999999999,
+            }
+            latest["alerts"].append(self.alert(
+                "b" * 32, "price", 200, code="2317", name="鴻海",
+            ))
+
+        store = SchedulerStore({"U1": observed}, before_update=user_changes)
+        stock_app.run_alert_checks(
+            store, lambda code: scheduler_quote(), lambda *args: None,
+            "2026-06-23", "https://example.com",
+        )
+
+        latest = store.users["U1"]
+        self.assertEqual(latest["watchlist"][0]["code"], "2317")
+        self.assertEqual(latest["pending"]["code"], "2317")
+        self.assertEqual(len(latest["alerts"]), 2)
+        self.assertEqual(latest["alerts"][0]["last_triggered_date"], "2026-06-23")
+        self.assertIsNone(latest["alerts"][1]["last_triggered_date"])
+
+    def test_push_flex_has_one_web_cta_per_hit(self):
+        quote = scheduler_quote()
+        hits = [
+            {"alert": self.alert("1" * 32, "price", 900), "quote": quote},
+            {"alert": self.alert("2" * 32, "trend", "多頭"), "quote": quote},
+        ]
+
+        message = stock_app.build_alert_push_flex(hits, "https://example.com/")
+
+        self.assertEqual(message["type"], "carousel")
+        self.assertEqual(len(message["contents"]), 2)
+        for bubble in message["contents"]:
+            buttons = bubble["footer"]["contents"]
+            self.assertEqual(len(buttons), 1)
+            self.assertEqual(buttons[0]["action"]["type"], "uri")
+            self.assertEqual(buttons[0]["action"]["uri"], "https://example.com/stock/2330")
+            self.assertIn("目前", str(bubble))
+
+    def test_more_than_twelve_hits_use_one_push_with_legal_carousels(self):
+        state = scheduler_state()
+        state["alerts"] = [
+            self.alert(f"{index:032x}", "price", 1)
+            for index in range(13)
+        ]
+        store = SchedulerStore({"U1": state})
+        pushes = []
+
+        stock_app.run_alert_checks(
+            store, lambda code: scheduler_quote(),
+            lambda user_id, contents: pushes.append(contents),
+            "2026-06-23", "https://example.com",
+        )
+
+        self.assertEqual(len(pushes), 1)
+        self.assertIsInstance(pushes[0], list)
+        self.assertEqual([len(message["contents"]) for message in pushes[0]], [12, 1])
+        self.assertTrue(all(
+            alert["last_triggered_date"] == "2026-06-23"
+            for alert in store.users["U1"]["alerts"]
+        ))
+
+
+class ScheduledAlertRouteTests(unittest.TestCase):
+    def setUp(self):
+        self.client = stock_app.app.test_client()
+
+    def test_missing_token_configuration_returns_503(self):
+        with patch.object(stock_app, "ALERT_TASK_TOKEN", None), \
+             patch.object(stock_app, "run_alert_checks") as run:
+            response = self.client.post("/tasks/check-alerts")
+        self.assertEqual(response.status_code, 503)
+        run.assert_not_called()
+
+    def test_authorization_requires_exact_bearer_token(self):
+        invalid = (None, "", "secret", "Bearer", "Bearer secret extra", "bearer secret")
+        for value in invalid:
+            headers = {} if value is None else {"Authorization": value}
+            with self.subTest(value=value), \
+                 patch.object(stock_app, "ALERT_TASK_TOKEN", "secret"), \
+                 patch.object(stock_app, "line_store", object()), \
+                 patch.object(stock_app, "run_alert_checks") as run:
+                response = self.client.post("/tasks/check-alerts", headers=headers)
+            self.assertEqual(response.status_code, 403)
+            run.assert_not_called()
+
+    def test_missing_store_returns_503_after_valid_auth(self):
+        with patch.object(stock_app, "ALERT_TASK_TOKEN", "secret"), \
+             patch.object(stock_app, "line_store", None), \
+             patch.object(stock_app, "run_alert_checks") as run:
+            response = self.client.post(
+                "/tasks/check-alerts", headers={"Authorization": "Bearer secret"},
+            )
+        self.assertEqual(response.status_code, 503)
+        run.assert_not_called()
+
+    def test_success_pushes_flex_and_returns_200(self):
+        line_api = Mock()
+
+        def run(store, analyze_fn, push_fn, today, base_url):
+            push_fn("U1", stock_app.build_alert_push_flex([{
+                "alert": {
+                    "id": "a" * 32, "code": "2330", "name": "台積電",
+                    "kind": "price", "value": 900, "enabled": True,
+                    "last_triggered_date": None,
+                },
+                "quote": scheduler_quote(),
+            }], base_url))
+
+        with patch.object(stock_app, "ALERT_TASK_TOKEN", "secret"), \
+             patch.object(stock_app, "line_store", object()), \
+             patch.object(stock_app, "line_bot_api", line_api), \
+             patch.object(stock_app, "run_alert_checks", side_effect=run):
+            response = self.client.post(
+                "/tasks/check-alerts", headers={"Authorization": "Bearer secret"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        line_api.push_message.assert_called_once()
+        self.assertEqual(line_api.push_message.call_args.args[0], "U1")
+        self.assertEqual(line_api.push_message.call_args.args[1].type, "flex")
+
+    def test_internal_error_does_not_leak_secret(self):
+        with patch.object(stock_app, "ALERT_TASK_TOKEN", "secret-value"), \
+             patch.object(stock_app, "line_store", object()), \
+             patch.object(stock_app, "run_alert_checks", side_effect=RuntimeError("secret-value")):
+            response = self.client.post(
+                "/tasks/check-alerts", headers={"Authorization": "Bearer secret-value"},
+            )
+        self.assertEqual(response.status_code, 500)
+        self.assertNotIn(b"secret-value", response.data)
+
+
+class AnalyzeDateTests(unittest.TestCase):
+    def test_do_analyze_returns_last_market_date_as_iso(self):
+        dates = stock_app.pd.date_range("2025-09-01", periods=200, freq="D", name="Date")
+        frame = stock_app.pd.DataFrame({
+            "Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0,
+            "MA20": 90.0, "AI_P": 70.0, "RSI": 55.0, "Volat": 0.02,
+            "MACD_OSC": 1.0, "K": 60.0, "D": 50.0,
+        }, index=dates)
+        with patch.object(stock_app, "get_data", return_value=frame), \
+             patch.object(stock_app, "calc_all", side_effect=lambda value: value), \
+             patch.object(stock_app, "run_ai_engine", return_value={"ok": True}), \
+             patch.object(stock_app, "get_stock_name", return_value="台積電"), \
+             patch.object(stock_app, "get_news", return_value=[]):
+            result = stock_app._do_analyze("2330")
+
+        self.assertEqual(result["as_of"], dates[-1].date().isoformat())
 
 
 if __name__ == "__main__":
