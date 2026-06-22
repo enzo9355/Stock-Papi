@@ -1,4 +1,6 @@
+import copy
 import os
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -36,18 +38,45 @@ def message_event(text, user_id="U123"):
     )
 
 
-class MemoryStore:
+class CopyOnWriteStore:
     def __init__(self, state=None):
         self.state = state if state is not None else empty_state()
         self.updated_user_ids = []
 
     def load(self, user_id):
-        return self.state, "v1"
+        return copy.deepcopy(self.state), "v1"
 
     def update(self, user_id, mutate):
         self.updated_user_ids.append(user_id)
-        mutate(self.state)
-        return self.state
+        candidate = copy.deepcopy(self.state)
+        mutate(candidate)
+        self.state = candidate
+        return copy.deepcopy(self.state)
+
+
+class InterleavingStore(CopyOnWriteStore):
+    def __init__(self, observed_state, latest_state):
+        super().__init__(latest_state)
+        self.observed_state = copy.deepcopy(observed_state)
+
+    def load(self, user_id):
+        observed = self.observed_state
+        self.observed_state = copy.deepcopy(self.state)
+        return copy.deepcopy(observed), "v1"
+
+
+class SlowReadStore:
+    def __init__(self, delay=0.75):
+        self.delay = delay
+        self.update_calls = 0
+
+    def load(self, user_id):
+        time.sleep(self.delay)
+        return empty_state(), "v1"
+
+    def update(self, user_id, mutate):
+        self.update_calls += 1
+        raise AssertionError("read timeout must never schedule a late update")
 
 
 class LineBuilderTests(unittest.TestCase):
@@ -158,7 +187,7 @@ class LineBuilderTests(unittest.TestCase):
 
 class PostbackTests(unittest.TestCase):
     def call(self, payload, state=None, search_result=("2330", "台積電")):
-        store = MemoryStore(state)
+        store = CopyOnWriteStore(state)
         line_api = Mock()
         with patch.object(stock_app, "line_store", store), \
              patch.object(stock_app, "line_bot_api", line_api), \
@@ -186,6 +215,13 @@ class PostbackTests(unittest.TestCase):
 
         self.assertEqual(store.state["watchlist"][0]["code"], "2330")
         self.assertEqual((store.state["alerts"][0]["kind"], store.state["alerts"][0]["value"]), ("trend", "空頭"))
+
+    def test_repeated_trend_postback_is_idempotent(self):
+        store, _ = self.call("alert:trend:2330:多頭")
+        store, line_api = self.call("alert:trend:2330:多頭", store.state)
+
+        self.assertEqual(len(store.state["alerts"]), 1)
+        self.assertIn("已存在", line_api.reply_message.call_args.args[1].text)
 
     def test_alert_menu_replies_without_updating(self):
         store, line_api = self.call("alert:menu:2330")
@@ -226,7 +262,7 @@ class PostbackTests(unittest.TestCase):
 
     def test_requires_line_user_id(self):
         line_api = Mock()
-        with patch.object(stock_app, "line_store", MemoryStore()), patch.object(stock_app, "line_bot_api", line_api):
+        with patch.object(stock_app, "line_store", CopyOnWriteStore()), patch.object(stock_app, "line_bot_api", line_api):
             stock_app.handle_postback(postback_event("watch:add:2330", user_id=None))
 
         line_api.reply_message.assert_called_once()
@@ -266,7 +302,7 @@ class MessageFlowTests(unittest.TestCase):
     def test_pending_numeric_success_creates_alert_and_stops_stock_lookup(self):
         state = empty_state()
         state["pending"] = {"code": "2330", "name": "台積電", "kind": "probability", "expires_at": 9999999999}
-        store = MemoryStore(state)
+        store = CopyOnWriteStore(state)
         line_api = Mock()
         with stock_app.app.test_request_context("/callback", base_url="https://example.com/"), \
              patch.object(stock_app, "line_store", store), \
@@ -283,7 +319,7 @@ class MessageFlowTests(unittest.TestCase):
     def test_pending_cancel_clears_pending_without_alert(self):
         state = empty_state()
         state["pending"] = {"code": "2330", "name": "台積電", "kind": "price", "expires_at": 9999999999}
-        store = MemoryStore(state)
+        store = CopyOnWriteStore(state)
 
         line_api = self.call("取消", store)
 
@@ -295,18 +331,104 @@ class MessageFlowTests(unittest.TestCase):
         state = empty_state()
         pending = {"code": "2330", "name": "台積電", "kind": "price", "expires_at": 9999999999}
         state["pending"] = pending.copy()
-        store = MemoryStore(state)
+        store = CopyOnWriteStore(state)
 
         line_api = self.call("不是數字", store)
 
         self.assertEqual(store.state["pending"], pending)
         self.assertIn("有效數字", line_api.reply_message.call_args.args[1].text)
 
+    def test_expired_pending_is_cleared_and_persisted_by_copy_on_write_store(self):
+        state = empty_state()
+        state["pending"] = {
+            "code": "2330", "name": "台積電", "kind": "price", "expires_at": 1,
+        }
+        store = CopyOnWriteStore(state)
+
+        line_api = self.call("900", store)
+
+        self.assertIsNone(store.state["pending"])
+        self.assertEqual(store.state["alerts"], [])
+        self.assertIn("逾時", line_api.reply_message.call_args.args[1].text)
+
+    def test_pending_numeric_rejects_interleaved_replacement(self):
+        observed = empty_state()
+        observed["pending"] = {
+            "code": "2330", "name": "台積電", "kind": "probability", "expires_at": 9999999999,
+        }
+        latest = empty_state()
+        latest["pending"] = {
+            "code": "2317", "name": "鴻海", "kind": "price", "expires_at": 9999999998,
+        }
+        store = InterleavingStore(observed, latest)
+
+        line_api = self.call("65", store)
+
+        self.assertEqual(store.state, latest)
+        self.assertIn("已變更", line_api.reply_message.call_args.args[1].text)
+
+    def test_pending_cancel_rejects_interleaved_replacement(self):
+        observed = empty_state()
+        observed["pending"] = {
+            "code": "2330", "name": "台積電", "kind": "probability", "expires_at": 9999999999,
+        }
+        latest = empty_state()
+        latest["pending"] = {
+            "code": "2330", "name": "台積電", "kind": "price", "expires_at": 9999999998,
+        }
+        store = InterleavingStore(observed, latest)
+
+        line_api = self.call("取消", store)
+
+        self.assertEqual(store.state, latest)
+        self.assertIn("已變更", line_api.reply_message.call_args.args[1].text)
+
+    def test_repeated_numeric_alert_is_idempotent_and_clears_pending(self):
+        state = empty_state()
+        state["alerts"] = [{
+            "id": "a" * 32, "code": "2330", "name": "台積電",
+            "kind": "probability", "value": 65.0, "enabled": True,
+            "last_triggered_date": None,
+        }]
+        state["pending"] = {
+            "code": "2330", "name": "台積電", "kind": "probability", "expires_at": 9999999999,
+        }
+        store = CopyOnWriteStore(state)
+
+        line_api = self.call("65", store)
+
+        self.assertIsNone(store.state["pending"])
+        self.assertEqual(len(store.state["alerts"]), 1)
+        self.assertIn("已存在", line_api.reply_message.call_args.args[1].text)
+
+    def test_slow_state_reads_fail_open_for_non_state_commands_within_budget(self):
+        cases = ("2330", "大盤", "新手教學")
+        stores = []
+        for text in cases:
+            with self.subTest(text=text):
+                store = SlowReadStore()
+                stores.append(store)
+                line_api = Mock()
+                started = time.perf_counter()
+                with stock_app.app.test_request_context("/callback", base_url="https://example.com/"), \
+                     patch.object(stock_app, "line_store", store), \
+                     patch.object(stock_app, "line_bot_api", line_api), \
+                     patch.object(stock_app, "search_stock_code", return_value=("2330", "台積電")), \
+                     patch.object(stock_app, "analyze", return_value=sample_data()):
+                    stock_app.handle_message(message_event(text))
+                elapsed = time.perf_counter() - started
+
+                self.assertLess(elapsed, 0.55)
+                line_api.reply_message.assert_called_once()
+
+        time.sleep(0.8)
+        self.assertTrue(all(store.update_calls == 0 for store in stores))
+
     def test_watchlist_and_strong_signals_reply_in_line(self):
         state = empty_state()
         state["watchlist"] = [{"code": "2330", "name": "台積電", "added_at": 1}]
         state["signals"] = {"as_of": "2026-06-22", "items": []}
-        store = MemoryStore(state)
+        store = CopyOnWriteStore(state)
 
         for text in ("我的關注", "強勢訊號"):
             with self.subTest(text=text):
@@ -332,7 +454,7 @@ class MessageFlowTests(unittest.TestCase):
         data = sample_data()
         state = empty_state()
         state["watchlist"] = [{"code": "2330", "name": "台積電", "added_at": 1}]
-        for store, expected in ((MemoryStore(state), "watch:remove:2330"), (Mock(), "watch:add:2330")):
+        for store, expected in ((CopyOnWriteStore(state), "watch:remove:2330"), (Mock(), "watch:add:2330")):
             if isinstance(store, Mock):
                 store.load.side_effect = StoreError("unavailable")
             line_api = Mock()

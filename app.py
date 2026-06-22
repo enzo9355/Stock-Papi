@@ -3,7 +3,9 @@
 # --------------------------------------------------
 
 import os
+import queue
 import re
+import threading
 import time
 import datetime
 import hmac
@@ -42,6 +44,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 LOCAL_HOST = os.getenv("HOST", "127.0.0.1")
 BROADCAST_TOKEN = os.getenv("BROADCAST_TOKEN")
+LINE_STATE_READ_BUDGET_SECONDS = 0.25
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 1_000_000
@@ -713,6 +716,28 @@ def get_line_state(user_id):
     return line_store.load(user_id)[0]
 
 
+def get_line_state_bounded(user_id, timeout=LINE_STATE_READ_BUDGET_SECONDS):
+    store = line_store
+    if store is None:
+        raise StoreError("關注功能尚未設定")
+    result = queue.Queue(maxsize=1)
+
+    def load_state():
+        try:
+            result.put((True, store.load(user_id)[0]))
+        except Exception:
+            result.put((False, None))
+
+    threading.Thread(target=load_state, daemon=True).start()
+    try:
+        succeeded, state = result.get(timeout=timeout)
+    except queue.Empty:
+        raise StoreError("關注功能讀取逾時") from None
+    if not succeeded:
+        raise StoreError("關注功能讀取失敗")
+    return state
+
+
 def update_line_state(user_id, mutate):
     if line_store is None:
         raise StoreError("關注功能尚未設定")
@@ -1214,6 +1239,23 @@ def _reply_text(event, text):
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
 
 
+def _require_same_pending(state, expected_pending):
+    if state.get("pending") != expected_pending:
+        raise StateError("提醒設定已變更，請重新操作。")
+
+
+def _find_matching_alert(alerts, code, kind, value):
+    return next(
+        (
+            alert for alert in alerts
+            if alert.get("code") == code
+            and alert.get("kind") == kind
+            and alert.get("value") == value
+        ),
+        None,
+    )
+
+
 def _resolve_postback_stock(code):
     resolved_code, name = search_stock_code(code)
     if (
@@ -1302,13 +1344,22 @@ def handle_postback(event):
             reply = f"請輸入 {name} 的{label}門檻數字，或輸入「取消」。"
         elif alert_trend_match:
             trend = alert_trend_match.group(2)
+            created = {"value": False}
 
             def create_trend_alert(state):
+                created["value"] = False
                 add_watch(state, code, name)
+                if _find_matching_alert(state.get("alerts", []), code, "trend", trend):
+                    return
                 add_alert(state, code, name, "trend", trend)
+                created["value"] = True
 
             update_line_state(user_id, create_trend_alert)
-            reply = f"已建立 {name} 趨勢轉為{trend}時的提醒。"
+            reply = (
+                f"已建立 {name} 趨勢轉為{trend}時的提醒。"
+                if created["value"]
+                else f"{name} 趨勢轉為{trend}時的提醒已存在。"
+            )
         else:
             _reply_text(event, "無效的操作，請重新開啟功能選單。")
             return
@@ -1329,28 +1380,62 @@ def handle_message(event):
 
     if line_store is not None and user_id:
         try:
-            current_state = get_line_state(user_id)
+            current_state = get_line_state_bounded(user_id)
         except StoreError:
             state_load_failed = True
 
     if current_state and current_state.get("pending"):
+        expected_pending = dict(current_state["pending"])
         try:
             if msg == "取消":
                 def cancel_pending(state):
+                    _require_same_pending(state, expected_pending)
                     state["pending"] = None
 
                 update_line_state(user_id, cancel_pending)
                 _reply_text(event, "已取消提醒設定。")
             else:
-                created = {"alert": None}
+                outcome = {"alert": None, "created": False, "expired": False}
 
                 def finish_pending(state):
-                    created["alert"] = consume_pending(state, msg)
+                    outcome.update(alert=None, created=False, expired=False)
+                    _require_same_pending(state, expected_pending)
+                    now = time.time()
+                    if expected_pending["expires_at"] <= now:
+                        state["pending"] = None
+                        outcome["expired"] = True
+                        return
+                    preview_state = {
+                        "pending": dict(expected_pending),
+                        "alerts": [],
+                    }
+                    preview = consume_pending(preview_state, msg, now=now)
+                    duplicate = _find_matching_alert(
+                        state.get("alerts", []),
+                        preview["code"],
+                        preview["kind"],
+                        preview["value"],
+                    )
+                    if duplicate:
+                        state["pending"] = None
+                        outcome["alert"] = duplicate
+                        return
+                    alert = consume_pending(state, msg, now=now)
+                    outcome["alert"] = alert
+                    outcome["created"] = True
 
                 update_line_state(user_id, finish_pending)
-                alert = created["alert"]
-                label = "收盤價" if alert["kind"] == "price" else "五日上漲機率"
-                _reply_text(event, f"已建立 {alert['name']} 的{label}提醒。")
+                if outcome["expired"]:
+                    _reply_text(event, "提醒設定已逾時，請重新設定。")
+                else:
+                    alert = outcome["alert"]
+                    label = "收盤價" if alert["kind"] == "price" else "五日上漲機率"
+                    reply = (
+                        f"已建立 {alert['name']} 的{label}提醒。"
+                        if outcome["created"]
+                        else f"{alert['name']} 的{label}提醒已存在。"
+                    )
+                    _reply_text(event, reply)
         except StateError as error:
             _reply_text(event, str(error))
         except StoreError:
