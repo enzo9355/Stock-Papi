@@ -722,10 +722,10 @@ def get_line_state_bounded(user_id, timeout=LINE_STATE_READ_BUDGET_SECONDS):
     store = line_store
     if store is None:
         raise StoreError("關注功能尚未設定")
+    result = queue.Queue(maxsize=1)
     slots = _line_state_read_slots
     if not slots.acquire(blocking=False):
         raise StoreError("關注功能讀取忙碌")
-    result = queue.Queue(maxsize=1)
 
     def load_state():
         try:
@@ -743,9 +743,11 @@ def get_line_state_bounded(user_id, timeout=LINE_STATE_READ_BUDGET_SECONDS):
 
     try:
         threading.Thread(target=load_state, daemon=True).start()
-    except Exception:
+    except BaseException as error:
         slots.release()
-        raise StoreError("關注功能讀取失敗") from None
+        if isinstance(error, Exception):
+            raise StoreError("關注功能讀取失敗") from None
+        raise
     try:
         succeeded, state = result.get(timeout=timeout)
     except queue.Empty:

@@ -112,6 +112,10 @@ class ReaderAbort(BaseException):
     pass
 
 
+class ThreadSetupAbort(BaseException):
+    pass
+
+
 class BaseExceptionReadStore:
     def __init__(self):
         self.condition = threading.Condition()
@@ -528,6 +532,28 @@ class MessageFlowTests(unittest.TestCase):
              patch.object(stock_app, "_line_state_read_slots", slots), \
              patch.object(stock_app.threading, "Thread", side_effect=RuntimeError):
             with self.assertRaises(StoreError):
+                stock_app.get_line_state_bounded("U123", timeout=0.05)
+
+        self.assertTrue(slots.acquire(blocking=False))
+        slots.release()
+
+    def test_queue_construction_failure_does_not_consume_reader_slot(self):
+        slots = threading.BoundedSemaphore(1)
+        with patch.object(stock_app, "line_store", CopyOnWriteStore()), \
+             patch.object(stock_app, "_line_state_read_slots", slots), \
+             patch.object(stock_app.queue, "Queue", side_effect=RuntimeError):
+            with self.assertRaises(RuntimeError):
+                stock_app.get_line_state_bounded("U123", timeout=0.05)
+
+        self.assertTrue(slots.acquire(blocking=False))
+        slots.release()
+
+    def test_thread_setup_base_exception_releases_slot_and_is_reraised(self):
+        slots = threading.BoundedSemaphore(1)
+        with patch.object(stock_app, "line_store", CopyOnWriteStore()), \
+             patch.object(stock_app, "_line_state_read_slots", slots), \
+             patch.object(stock_app.threading, "Thread", side_effect=ThreadSetupAbort):
+            with self.assertRaises(ThreadSetupAbort):
                 stock_app.get_line_state_bounded("U123", timeout=0.05)
 
         self.assertTrue(slots.acquire(blocking=False))
