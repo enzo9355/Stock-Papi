@@ -520,7 +520,7 @@ def build_alert_menu_flex(code, name):
     return build_line_choice_card(
         f"設定 {name} 提醒",
         [("收盤價門檻", f"alert:start:{code}:price"), ("機率門檻", f"alert:start:{code}:probability"),
-         ("趨勢轉多", f"alert:trend:{code}:多頭"), ("趨勢轉空", f"alert:trend:{code}:空頭")],
+         ("趨勢為多頭", f"alert:trend:{code}:多頭"), ("趨勢為空頭", f"alert:trend:{code}:空頭")],
     )
 
 def build_strong_signals_flex(state, base_url):

@@ -959,8 +959,8 @@ def build_alert_menu_flex(code, name):
     choices = [
         ("收盤價門檻", f"alert:start:{code}:price"),
         ("機率門檻", f"alert:start:{code}:probability"),
-        ("趨勢轉多", f"alert:trend:{code}:多頭"),
-        ("趨勢轉空", f"alert:trend:{code}:空頭"),
+        ("趨勢為多頭", f"alert:trend:{code}:多頭"),
+        ("趨勢為空頭", f"alert:trend:{code}:空頭"),
     ]
     return {
         "type": "bubble",
@@ -1028,7 +1028,7 @@ def build_alert_push_flex(hits, base_url):
             condition = f"條件：五日上漲機率達到 {float(alert['value']):g}%"
             current = f"目前機率：{quote['prob']}%"
         else:
-            condition = f"條件：趨勢轉為{alert['value']}"
+            condition = f"條件：趨勢為{alert['value']}"
             current = f"目前趨勢：{quote['trend']}"
         return {
             "type": "bubble", "size": "kilo",
@@ -1061,39 +1061,51 @@ def build_alert_push_flex(hits, base_url):
 
 
 def run_alert_checks(store, analyze_fn, push_fn, today, base_url):
-    users = list(store.iter_users())
-    codes = list(dict.fromkeys(
-        item["code"]
-        for _, state, _ in users
-        for item in state.get("watchlist", [])
-        if isinstance(item, dict) and item.get("code")
-    ))
     quotes = {}
-    for code in codes:
+    push_failed = False
+
+    def quote_for(code):
+        if code in quotes:
+            return quotes[code]
         try:
             data = analyze_fn(code)
             if not data or not isinstance(data.get("as_of"), str):
-                continue
+                quotes[code] = None
+                return None
             datetime.date.fromisoformat(data["as_of"])
             quotes[code] = {
                 "code": code, "name": data["name"], "price": float(data["price"]),
                 "prob": int(data["prob"]), "trend": data["trend"], "as_of": data["as_of"],
             }
         except Exception:
-            continue
+            quotes[code] = None
+        return quotes[code]
 
-    for user_id, observed, _ in users:
+    for user_id, observed, _ in store.iter_users():
+        observed_codes = [
+            item["code"] for item in observed.get("watchlist", [])
+            if isinstance(item, dict) and item.get("code")
+        ]
         watched = [
-            quotes[item["code"]] for item in observed.get("watchlist", [])
-            if isinstance(item, dict) and item.get("code") in quotes
+            quote for code in observed_codes
+            for quote in [quote_for(code)]
+            if quote is not None
         ]
         if not watched:
             continue
-        latest_as_of = max(item["as_of"] for item in watched)
-        stored_as_of = observed.get("signals", {}).get("as_of")
-        if stored_as_of and latest_as_of <= stored_as_of:
+        prior_as_of = {
+            item.get("code"): item.get("as_of")
+            for item in observed.get("signals", {}).get("items", [])
+            if isinstance(item, dict) and item.get("code") and isinstance(item.get("as_of"), str)
+        }
+        fresh_codes = {
+            quote["code"] for quote in watched
+            if not prior_as_of.get(quote["code"]) or quote["as_of"] > prior_as_of[quote["code"]]
+        }
+        if not fresh_codes:
             continue
 
+        latest_as_of = max(item["as_of"] for item in watched)
         signal_items = top_signals(watched)
         hits = []
         for alert in observed.get("alerts", []):
@@ -1102,6 +1114,7 @@ def run_alert_checks(store, analyze_fn, push_fn, today, base_url):
                 not alert.get("enabled")
                 or alert.get("last_triggered_date") == today
                 or quote is None
+                or quote["code"] not in fresh_codes
             ):
                 continue
             try:
@@ -1115,12 +1128,19 @@ def run_alert_checks(store, analyze_fn, push_fn, today, base_url):
                 build_alert_push_flex(hits[start:start + 12], base_url)
                 for start in range(0, len(hits), 12)
             ]
-            push_fn(user_id, messages[0] if len(messages) == 1 else messages)
+            try:
+                push_fn(user_id, messages[0] if len(messages) == 1 else messages)
+            except Exception:
+                push_failed = True
+                continue
         triggered_ids = {hit["alert"]["id"] for hit in hits}
 
         def merge_scheduler_fields(state):
-            current_as_of = state.get("signals", {}).get("as_of")
-            if not current_as_of or current_as_of < latest_as_of:
+            current_codes = [
+                item["code"] for item in state.get("watchlist", [])
+                if isinstance(item, dict) and item.get("code")
+            ]
+            if current_codes == observed_codes:
                 state["signals"] = {
                     "as_of": latest_as_of,
                     "items": [dict(item) for item in signal_items],
@@ -1130,6 +1150,8 @@ def run_alert_checks(store, analyze_fn, push_fn, today, base_url):
                     alert["last_triggered_date"] = today
 
         store.update(user_id, merge_scheduler_fields)
+    if push_failed:
+        raise RuntimeError("部分 LINE 提醒發送失敗")
 
 def build_line_summary_card(title, lines, cta_label, url, accent="#39c6a3"):
     """建立只有一個 Web CTA 的 LINE 摘要卡。"""
@@ -1527,9 +1549,9 @@ def handle_postback(event):
 
             update_line_state(user_id, create_trend_alert)
             reply = (
-                f"已建立 {name} 趨勢轉為{trend}時的提醒。"
+                f"已建立 {name} 趨勢為{trend}時的提醒。"
                 if created["value"]
-                else f"{name} 趨勢轉為{trend}時的提醒已存在。"
+                else f"{name} 趨勢為{trend}時的提醒已存在。"
             )
         else:
             _reply_text(event, "無效的操作，請重新開啟功能選單。")

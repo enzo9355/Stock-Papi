@@ -250,6 +250,8 @@ class LineBuilderTests(unittest.TestCase):
             "alert:trend:2330:空頭",
         ])
         self.assertTrue(all(action["type"] == "postback" for action in actions))
+        self.assertEqual([action["label"] for action in actions[2:]], ["趨勢為多頭", "趨勢為空頭"])
+        self.assertNotIn("趨勢轉", str(card))
 
     def test_strong_signals_empty_is_one_explanatory_bubble(self):
         message = stock_app.build_strong_signals_flex(empty_state(), "https://example.com")
@@ -306,10 +308,13 @@ class PostbackTests(unittest.TestCase):
         self.assertEqual(store.state["pending"]["kind"], "probability")
 
     def test_alert_trend_adds_watch_and_alert(self):
-        store, _ = self.call("alert:trend:2330:空頭")
+        store, line_api = self.call("alert:trend:2330:空頭")
 
         self.assertEqual(store.state["watchlist"][0]["code"], "2330")
         self.assertEqual((store.state["alerts"][0]["kind"], store.state["alerts"][0]["value"]), ("trend", "空頭"))
+        reply = line_api.reply_message.call_args.args[1].text
+        self.assertIn("趨勢為空頭", reply)
+        self.assertNotIn("轉為", reply)
 
     def test_repeated_trend_postback_is_idempotent(self):
         store, _ = self.call("alert:trend:2330:多頭")
@@ -691,7 +696,10 @@ class ScheduledAlertTests(unittest.TestCase):
 
     def test_stale_or_missing_as_of_does_not_push_or_update(self):
         stale = scheduler_state()
-        stale["signals"] = {"as_of": "2026-06-22", "items": []}
+        stale["signals"] = {
+            "as_of": "2026-06-22",
+            "items": [scheduler_quote(as_of="2026-06-22")],
+        }
         stale["alerts"] = [self.alert("a" * 32, "price", 1)]
         pushes = []
 
@@ -717,6 +725,40 @@ class ScheduledAlertTests(unittest.TestCase):
         self.assertEqual(pushes, [])
         self.assertEqual(stale_store.update_calls, [])
 
+    def test_freshness_is_compared_per_stock_code(self):
+        state = scheduler_state()
+        state["watchlist"].append({"code": "2317", "name": "鴻海", "added_at": 2})
+        state["signals"] = {
+            "as_of": "2026-06-23",
+            "items": [
+                scheduler_quote(as_of="2026-06-23"),
+                scheduler_quote("2317", "鴻海", price=210.0, prob=60, as_of="2026-06-22"),
+            ],
+        }
+        state["alerts"] = [self.alert(
+            "b" * 32, "price", 200, code="2317", name="鴻海",
+        )]
+        store = SchedulerStore({"U1": state})
+        pushes = []
+
+        stock_app.run_alert_checks(
+            store,
+            lambda code: scheduler_quote(
+                code, "鴻海" if code == "2317" else "台積電",
+                price=210.0 if code == "2317" else 1000.0,
+                prob=60 if code == "2317" else 70,
+                as_of="2026-06-23",
+            ),
+            lambda user_id, contents: pushes.append(contents),
+            "2026-06-23", "https://example.com",
+        )
+
+        self.assertEqual(len(pushes), 1)
+        self.assertIn("2317", str(pushes[0]))
+        self.assertNotIn("2330", str(pushes[0]))
+        snapshot = {item["code"]: item["as_of"] for item in store.users["U1"]["signals"]["items"]}
+        self.assertEqual(snapshot, {"2330": "2026-06-23", "2317": "2026-06-23"})
+
     def test_analysis_failure_or_none_is_skipped(self):
         for failure in (None, RuntimeError("行情失敗")):
             with self.subTest(failure=failure):
@@ -736,23 +778,37 @@ class ScheduledAlertTests(unittest.TestCase):
                 self.assertEqual(pushes, [])
                 self.assertEqual(store.update_calls, [])
 
-    def test_push_failure_does_not_mark_or_update(self):
-        state = scheduler_state()
-        state["alerts"] = [self.alert("a" * 32, "price", 1)]
-        store = SchedulerStore({"U1": state})
+    def test_push_failure_is_isolated_and_raised_without_sensitive_details(self):
+        first = scheduler_state()
+        first["alerts"] = [self.alert("a" * 32, "price", 1)]
+        second = scheduler_state("2317", "鴻海")
+        second["alerts"] = [self.alert(
+            "b" * 32, "price", 1, code="2317", name="鴻海",
+        )]
+        store = SchedulerStore({"U-sensitive": first, "U2": second})
+        pushed = []
 
-        with self.assertRaisesRegex(RuntimeError, "push failed"):
+        def push(user_id, contents):
+            pushed.append(user_id)
+            if user_id == "U-sensitive":
+                raise RuntimeError("LINE token secret failed")
+
+        with self.assertRaisesRegex(RuntimeError, "部分 LINE 提醒發送失敗") as raised:
             stock_app.run_alert_checks(
                 store,
-                lambda code: scheduler_quote(),
-                lambda *args: (_ for _ in ()).throw(RuntimeError("push failed")),
+                lambda code: scheduler_quote(code, "鴻海" if code == "2317" else "台積電"),
+                push,
                 "2026-06-23",
                 "https://example.com",
             )
 
-        self.assertEqual(store.update_calls, [])
-        self.assertIsNone(store.users["U1"]["alerts"][0]["last_triggered_date"])
-        self.assertIsNone(store.users["U1"]["signals"]["as_of"])
+        self.assertNotIn("secret", str(raised.exception))
+        self.assertNotIn("U-sensitive", str(raised.exception))
+        self.assertEqual(pushed, ["U-sensitive", "U2"])
+        self.assertEqual(store.update_calls, ["U2"])
+        self.assertIsNone(store.users["U-sensitive"]["alerts"][0]["last_triggered_date"])
+        self.assertIsNone(store.users["U-sensitive"]["signals"]["as_of"])
+        self.assertEqual(store.users["U2"]["alerts"][0]["last_triggered_date"], "2026-06-23")
 
     def test_alert_kinds_disabled_and_daily_deduplication(self):
         state = scheduler_state()
@@ -806,6 +862,7 @@ class ScheduledAlertTests(unittest.TestCase):
         self.assertEqual(len(latest["alerts"]), 2)
         self.assertEqual(latest["alerts"][0]["last_triggered_date"], "2026-06-23")
         self.assertIsNone(latest["alerts"][1]["last_triggered_date"])
+        self.assertIsNone(latest["signals"]["as_of"])
 
     def test_push_flex_has_one_web_cta_per_hit(self):
         quote = scheduler_quote()
@@ -824,6 +881,7 @@ class ScheduledAlertTests(unittest.TestCase):
             self.assertEqual(buttons[0]["action"]["type"], "uri")
             self.assertEqual(buttons[0]["action"]["uri"], "https://example.com/stock/2330")
             self.assertIn("目前", str(bubble))
+            self.assertNotIn("轉為", str(bubble))
 
     def test_more_than_twelve_hits_use_one_push_with_legal_carousels(self):
         state = scheduler_state()
@@ -843,10 +901,48 @@ class ScheduledAlertTests(unittest.TestCase):
         self.assertEqual(len(pushes), 1)
         self.assertIsInstance(pushes[0], list)
         self.assertEqual([len(message["contents"]) for message in pushes[0]], [12, 1])
+        self.assertLessEqual(len(pushes[0]), 5)
         self.assertTrue(all(
             alert["last_triggered_date"] == "2026-06-23"
             for alert in store.users["U1"]["alerts"]
         ))
+
+    def test_users_are_streamed_and_analysis_cache_is_shared(self):
+        states = {"U1": scheduler_state(), "U2": scheduler_state()}
+        events = []
+
+        class StreamingStore(SchedulerStore):
+            def iter_users(self):
+                self.iter_calls += 1
+                yield "U1", copy.deepcopy(self.users["U1"]), "v1"
+                events.append("second-user")
+                yield "U2", copy.deepcopy(self.users["U2"]), "v1"
+
+            def update(self, user_id, mutate):
+                events.append(f"update:{user_id}")
+                return super().update(user_id, mutate)
+
+        store = StreamingStore(states)
+        analyze_calls = []
+        stock_app.run_alert_checks(
+            store,
+            lambda code: analyze_calls.append(code) or scheduler_quote(),
+            lambda *args: None,
+            "2026-06-23", "https://example.com",
+        )
+
+        self.assertLess(events.index("update:U1"), events.index("second-user"))
+        self.assertEqual(analyze_calls, ["2330"])
+
+    def test_store_update_errors_are_not_swallowed(self):
+        store = SchedulerStore({"U1": scheduler_state()})
+        store.update = Mock(side_effect=StoreError("firestore unavailable"))
+
+        with self.assertRaisesRegex(StoreError, "firestore unavailable"):
+            stock_app.run_alert_checks(
+                store, lambda code: scheduler_quote(), lambda *args: None,
+                "2026-06-23", "https://example.com",
+            )
 
 
 class ScheduledAlertRouteTests(unittest.TestCase):
