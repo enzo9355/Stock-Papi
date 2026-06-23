@@ -19,6 +19,30 @@
     <div id="stock-chart" class="stock-chart" aria-label="{{ d.name }}互動式價格圖"></div>
   </section>
 
+  {% set projection = d.projection %}
+  {% set foreign = d.foreign_flow %}
+  <div class="analysis-grid">
+    <section class="panel calculator-panel" data-return-calculator data-price="{{ '%.4f'|format(d.price) }}" data-strategy-return="{{ '%.6f'|format(d.bt.strat_cum) }}" data-buyhold-return="{{ '%.6f'|format(d.bt.bh_cum) }}">
+      <div class="section-heading"><div><p class="eyebrow">RETURN CHECK</p><h2>投資金額試算</h2></div></div>
+      <label class="amount-field">投入金額<input type="number" min="0" step="1000" value="100000" data-investment-amount></label>
+      <div class="indicator-grid">
+        <article><span>約可買股數</span><strong data-shares>{{ projection.shares if projection.ok else '—' }}</strong><small>以最新收盤價估算</small></article>
+        <article><span>實際投入</span><strong data-deployed>{{ '{:,.0f}'.format(projection.deployed_amount) if projection.ok else '—' }}</strong><small>不含手續費與稅</small></article>
+        <article><span>AI 策略估算損益</span><strong data-strategy-profit>{{ '{:,.0f}'.format(projection.strategy_profit) if projection.ok else '—' }}</strong><small>歷史回測換算</small></article>
+        <article><span>買進持有估算損益</span><strong data-buyhold-profit>{{ '{:,.0f}'.format(projection.buy_hold_profit) if projection.ok else '—' }}</strong><small>歷史回測換算</small></article>
+      </div>
+      <p class="muted small">年化：AI 策略 {{ '%.2f'|format(projection.strategy_annualized) if projection.ok and projection.strategy_annualized is not none else '—' }}%，買進持有 {{ '%.2f'|format(projection.buy_hold_annualized) if projection.ok and projection.buy_hold_annualized is not none else '—' }}%。這是歷史回測換算，不代表未來獲利。</p>
+    </section>
+
+    <section class="panel foreign-panel">
+      <div class="section-heading"><div><p class="eyebrow">FOREIGN FLOW</p><h2>外資買賣超</h2></div><strong class="{{ 'positive' if foreign.status == '外資偏多' else 'negative' if foreign.status == '外資偏空' else '' }}">{{ foreign.status }}</strong></div>
+      <div class="indicator-grid">
+        <article><span>近 5 日</span><strong>{{ '{:,.0f}'.format(foreign.net_5) if foreign.available else '—' }}</strong><small>{{ foreign.source }}</small></article>
+        <article><span>近 20 日</span><strong>{{ '{:,.0f}'.format(foreign.net_20) if foreign.available else '—' }}</strong><small>籌碼資料可能延遲</small></article>
+      </div>
+    </section>
+  </div>
+
   <div class="analysis-grid">
     <section class="panel">
       <div class="section-heading"><div><p class="eyebrow">TECHNICALS</p><h2>技術指標</h2></div></div>

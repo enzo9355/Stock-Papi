@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 import threading
 import time
@@ -20,6 +21,7 @@ def sample_data():
         "trend": "多頭",
         "s_score": 55.0,
         "s_status": "中性",
+        "bt": {"strat_cum": 8.0, "bh_cum": 5.0, "days": 252},
     }
 
 
@@ -37,6 +39,10 @@ def message_event(text, user_id="U123"):
         message=SimpleNamespace(text=text),
         reply_token="reply",
     )
+
+
+def flex_text(message):
+    return json.dumps(message.as_json_dict(), ensure_ascii=False)
 
 
 class CopyOnWriteStore:
@@ -175,7 +181,7 @@ def scheduler_quote(code="2330", name="台積電", **changes):
 
 
 class LineBuilderTests(unittest.TestCase):
-    def test_stock_flex_has_two_postbacks_and_one_analysis_uri(self):
+    def test_stock_flex_has_three_postbacks_and_one_analysis_uri(self):
         card = stock_app.build_stock_flex_message(
             "2330", "台積電", sample_data(),
             "https://example.com/stock/2330", watched=False,
@@ -183,10 +189,11 @@ class LineBuilderTests(unittest.TestCase):
 
         actions = [item["action"] for item in card["footer"]["contents"]]
 
-        self.assertEqual([action["type"] for action in actions], ["postback", "postback", "uri"])
+        self.assertEqual([action["type"] for action in actions], ["postback", "postback", "postback", "uri"])
         self.assertEqual(actions[0]["data"], "watch:add:2330")
         self.assertEqual(actions[1]["data"], "alert:menu:2330")
-        self.assertEqual(actions[2], {
+        self.assertEqual(actions[2]["data"], "calc:menu:2330")
+        self.assertEqual(actions[3], {
             "type": "uri", "label": "查看完整分析",
             "uri": "https://example.com/stock/2330",
         })
@@ -306,7 +313,8 @@ class PostbackTests(unittest.TestCase):
     def call(self, payload, state=None, search_result=("2330", "台積電")):
         store = CopyOnWriteStore(state)
         line_api = Mock()
-        with patch.object(stock_app, "line_store", store), \
+        with stock_app.app.test_request_context("/callback", base_url="https://example.com/"), \
+             patch.object(stock_app, "line_store", store), \
              patch.object(stock_app, "line_bot_api", line_api), \
              patch.object(stock_app, "search_stock_code", return_value=search_result):
             stock_app.handle_postback(postback_event(payload))
@@ -349,6 +357,28 @@ class PostbackTests(unittest.TestCase):
         self.assertEqual(store.updated_user_ids, [])
         reply = line_api.reply_message.call_args.args[1]
         self.assertEqual(reply.type, "flex")
+
+    def test_calculator_menu_replies_with_preset_amount_buttons(self):
+        store, line_api = self.call("calc:menu:2330")
+
+        self.assertEqual(store.updated_user_ids, [])
+        reply = line_api.reply_message.call_args.args[1]
+        self.assertEqual(reply.type, "flex")
+        payload = flex_text(reply)
+        self.assertIn("1 萬", payload)
+        self.assertIn("calc:amount:2330:100000", payload)
+
+    @patch.object(stock_app, "analyze")
+    def test_calculator_amount_postback_replies_with_projection(self, analyze):
+        analyze.return_value = {
+            "code": "2330", "name": "台積電", "price": 100.0,
+            "bt": {"strat_cum": 8.0, "bh_cum": 5.0, "days": 252},
+        }
+
+        store, line_api = self.call("calc:amount:2330:100000")
+
+        self.assertEqual(store.updated_user_ids, [])
+        self.assertIn("約可買", flex_text(line_api.reply_message.call_args.args[1]))
 
     def test_alert_remove_filters_exact_hex_id_and_handles_missing(self):
         state = empty_state()
@@ -435,6 +465,21 @@ class MessageFlowTests(unittest.TestCase):
         self.assertEqual((store.state["alerts"][0]["kind"], store.state["alerts"][0]["value"]), ("probability", 65.0))
         line_api.reply_message.assert_called_once()
         self.assertIn("已建立", line_api.reply_message.call_args.args[1].text)
+
+    def test_text_calculator_command_replies_with_projection(self):
+        data = {
+            "code": "2330", "name": "台積電", "price": 100.0,
+            "bt": {"strat_cum": 8.0, "bh_cum": 5.0, "days": 252},
+        }
+        line_api = Mock()
+        with stock_app.app.test_request_context("/callback", base_url="https://example.com/"), \
+             patch.object(stock_app, "line_store", None), \
+             patch.object(stock_app, "line_bot_api", line_api), \
+             patch.object(stock_app, "search_stock_code", return_value=("2330", "台積電")), \
+             patch.object(stock_app, "analyze", return_value=data):
+            stock_app.handle_message(message_event("試算 2330 100000"))
+
+        self.assertIn("約可買", flex_text(line_api.reply_message.call_args.args[1]))
 
     def test_pending_cancel_clears_pending_without_alert(self):
         state = empty_state()

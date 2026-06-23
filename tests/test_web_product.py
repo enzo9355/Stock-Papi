@@ -17,6 +17,16 @@ def analysis_data():
         "k": 62.0, "d": 54.0, "s_score": 55.0, "s_status": "中性",
         "candles": "[]", "ma20_line": "[]", "prob_h": "[]", "pred": "[]",
         "news": [],
+        "projection": {
+            "ok": True, "amount": 100000, "shares": 1000,
+            "deployed_amount": 100000, "strategy_profit": 8000,
+            "buy_hold_profit": 5000, "strategy_annualized": 8.0,
+            "buy_hold_annualized": 5.0,
+        },
+        "foreign_flow": {
+            "available": True, "net_5": 1500, "net_20": 3200,
+            "status": "外資偏多", "source": "外資",
+        },
         "bt": {
             "days": 100, "accuracy": 54.0, "brier": 0.23,
             "strat_cum": 8.0, "bh_cum": 5.0, "win_rate": 57.0,
@@ -68,6 +78,8 @@ class WebProductTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
         for label in ["五日上漲機率", "技術指標", "模型解釋", "風險提醒"]:
+            self.assertIn(label, html)
+        for label in ["投資金額試算", "外資買賣超", "約可買股數", "外資偏多"]:
             self.assertIn(label, html)
         for web_only_removed in ["加入關注", "設定提醒", "data-watchlist-add", "data-alert-open"]:
             self.assertNotIn(web_only_removed, html)
@@ -141,6 +153,7 @@ class WebProductTests(unittest.TestCase):
 
         for removed in ["localStorage", "quant-watchlist", "data-watchlist", "data-alert-open", "data-alert-form"]:
             self.assertNotIn(removed, source)
+        self.assertIn("initReturnCalculator", source)
 
     def test_stock_chart_is_clipped_and_resizes_with_its_panel(self):
         css = Path(stock_app.app.static_folder, "app.css").read_text(encoding="utf-8")

@@ -34,6 +34,31 @@ function renderDashboard(data){
 
 loadDashboard();
 
+function formatNumber(value){
+  return Number.isFinite(value)?Math.round(value).toLocaleString('zh-TW'):'—';
+}
+
+function initReturnCalculator(){
+  const panel=bySelector('[data-return-calculator]');
+  if(!panel)return;
+  const input=bySelector('[data-investment-amount]',panel);
+  const price=Number(panel.dataset.price);
+  const strategyReturn=Number(panel.dataset.strategyReturn);
+  const buyholdReturn=Number(panel.dataset.buyholdReturn);
+  const update=()=>{
+    const amount=Number(input.value);
+    const shares=Math.floor(amount/price);
+    const deployed=shares*price;
+    const valid=Number.isFinite(amount)&&amount>0&&price>0&&shares>0;
+    bySelector('[data-shares]',panel).textContent=valid?shares.toLocaleString('zh-TW'):'—';
+    bySelector('[data-deployed]',panel).textContent=valid?formatNumber(deployed):'—';
+    bySelector('[data-strategy-profit]',panel).textContent=valid?formatNumber(deployed*strategyReturn/100):'—';
+    bySelector('[data-buyhold-profit]',panel).textContent=valid?formatNumber(deployed*buyholdReturn/100):'—';
+  };
+  input.addEventListener('input',update);
+  update();
+}
+
 function initStockChart(){
   const container=bySelector('#stock-chart');
   const source=bySelector('#stock-chart-data');
@@ -66,3 +91,4 @@ document.addEventListener('click',event=>{
 });
 
 initStockChart();
+initReturnCalculator();

@@ -133,6 +133,50 @@ class PredictionPipelineTests(unittest.TestCase):
         self.assertEqual(result.loc[1, "MarginBalance"], 3300)
         self.assertEqual(result.loc[1, "ShortBalance"], 120)
 
+    def test_investment_projection_calculates_shares_profit_and_annualized_return(self):
+        result = stock_app.calculate_investment_projection(
+            100000,
+            {"price": 100.0, "bt": {"strat_cum": 8.0, "bh_cum": 5.0, "days": 252}},
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["shares"], 1000)
+        self.assertEqual(result["deployed_amount"], 100000)
+        self.assertAlmostEqual(result["strategy_profit"], 8000)
+        self.assertAlmostEqual(result["buy_hold_profit"], 5000)
+        self.assertAlmostEqual(result["strategy_annualized"], 8.0)
+
+    def test_investment_projection_rejects_amount_too_small_for_one_share(self):
+        result = stock_app.calculate_investment_projection(
+            50,
+            {"price": 100.0, "bt": {"strat_cum": 8.0, "bh_cum": 5.0, "days": 252}},
+        )
+
+        self.assertFalse(result["ok"])
+
+    def test_merge_chip_data_prefers_foreign_flow_when_available(self):
+        price = pd.DataFrame({"Date": pd.to_datetime(["2026-01-02"]), "Close": [100.0]})
+        institutional = pd.DataFrame(
+            {
+                "date": ["2026-01-02", "2026-01-02"],
+                "name": ["Foreign_Dealer", "Investment_Trust"],
+                "buy": [1000, 500],
+                "sell": [200, 100],
+            }
+        )
+
+        result = stock_app.merge_chip_data(price, institutional)
+
+        self.assertEqual(result.loc[0, "InstitutionalNet"], 1200)
+        self.assertEqual(result.loc[0, "ForeignNet"], 800)
+
+    def test_foreign_flow_summary_reports_status_and_missing_data(self):
+        positive = stock_app.summarize_foreign_flow(pd.DataFrame({"ForeignNet": [100.0] * 20}))
+        missing = stock_app.summarize_foreign_flow(pd.DataFrame({"ForeignNet": [0.0] * 20}))
+
+        self.assertEqual(positive["status"], "外資偏多")
+        self.assertFalse(missing["available"])
+
     @patch("app.requests.get")
     def test_finmind_dataset_fetch_uses_existing_token(self, get):
         get.return_value = Mock(json=lambda: {"data": [{"value": 1}]})

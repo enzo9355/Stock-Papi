@@ -8,3 +8,4 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,su
 .button:hover,.signal-row:hover{border-color:#365878}
 @media(max-width:600px){.page{padding-inline:14px}.panel{padding:16px}.decision-strip strong,.indicator-grid strong{font-size:20px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.skeleton{animation:none}.button,.nav-link,.signal-row,.text-link,.mobile-nav a{transition:none}}
+.amount-field{display:grid;gap:8px;margin:16px 0;color:var(--muted);font-size:13px}.amount-field input{width:100%;min-height:44px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#091524;color:var(--text);font:inherit}.calculator-panel .small,.foreign-panel .small{margin-top:12px;line-height:1.7}

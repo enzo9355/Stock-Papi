@@ -21,6 +21,7 @@ LINE Official Account Manager 建立 Rich Menu 時，依上表設定四個 messa
 | --- | --- | --- |
 | 每日摘要 | 大盤趨勢、五日上漲機率、風險提示 | `/market` |
 | 強勢股票 | 股票名稱、最新價格、五日上漲機率 | `/stock/<code>` |
+| 投資試算 | 股票卡提供「投資試算」按鈕，再選 1 萬 / 5 萬 / 10 萬或自訂格式 | `/stock/<code>` |
 | 異常波動 | 漲跌或量能異常及白話說明 | `/stock/<code>` |
 | 關注提醒 | 觸發條件、目前值、觸發時間 | LINE Push；CTA 前往 `/stock/<code>` |
 

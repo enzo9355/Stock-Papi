@@ -126,6 +126,14 @@ def search_stock_code(keyword):
         if keyword in info.name.upper(): return code, info.name
     return None, None
 
+def _foreign_flow_mask(frame):
+    mask = pd.Series(False, index=frame.index)
+    for column in ("name", "institutional_investor", "institutional_investors", "type"):
+        if column in frame:
+            mask |= frame[column].astype(str).str.contains("Foreign|外資", case=False, regex=True, na=False)
+    return mask
+
+
 def merge_chip_data(price, institutional=None, margin=None):
     result = price.copy()
     if institutional is not None and not institutional.empty:
@@ -134,8 +142,13 @@ def merge_chip_data(price, institutional=None, margin=None):
         flows["buy"] = pd.to_numeric(flows["buy"], errors="coerce").fillna(0)
         flows["sell"] = pd.to_numeric(flows["sell"], errors="coerce").fillna(0)
         flows["InstitutionalNet"] = flows["buy"] - flows["sell"]
+        foreign_mask = _foreign_flow_mask(flows)
+        foreign = flows.loc[foreign_mask] if foreign_mask.any() else flows
+        foreign = foreign.groupby("Date", as_index=False)["InstitutionalNet"].sum()
+        foreign = foreign.rename(columns={"InstitutionalNet": "ForeignNet"})
         flows = flows.groupby("Date", as_index=False)["InstitutionalNet"].sum()
         result = result.merge(flows, on="Date", how="left")
+        result = result.merge(foreign, on="Date", how="left")
     if margin is not None and not margin.empty:
         balances = margin.copy()
         balances["Date"] = pd.to_datetime(balances["date"], errors="coerce")
@@ -151,7 +164,7 @@ def merge_chip_data(price, institutional=None, margin=None):
         ].apply(pd.to_numeric, errors="coerce")
         balances = balances.groupby("Date", as_index=False).last()
         result = result.merge(balances, on="Date", how="left")
-    for column in ["InstitutionalNet", "MarginBalance", "ShortBalance"]:
+    for column in ["InstitutionalNet", "ForeignNet", "MarginBalance", "ShortBalance"]:
         if column not in result:
             result[column] = 0.0
         result[column] = result[column].fillna(0.0)
@@ -159,12 +172,61 @@ def merge_chip_data(price, institutional=None, margin=None):
 
 def _clean_df(df):
     df[['Open', 'High', 'Low', 'Close']] = df[['Open', 'High', 'Low', 'Close']].replace(0, np.nan)
-    for column in ["Volume", "InstitutionalNet", "MarginBalance", "ShortBalance"]:
+    for column in ["Volume", "InstitutionalNet", "ForeignNet", "MarginBalance", "ShortBalance"]:
         if column not in df:
             df[column] = 0.0
         df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0.0)
     df = df.dropna(subset=['Date', 'Close'])
     return df.sort_values('Date').drop_duplicates(subset=['Date'], keep='last').set_index("Date")
+
+
+def _annualized_percent(total_percent, days):
+    if not days or days <= 0 or total_percent <= -100:
+        return None
+    return ((1 + total_percent / 100) ** (252 / days) - 1) * 100
+
+
+def calculate_investment_projection(amount, data):
+    try:
+        amount = float(amount)
+        price = float(data["price"])
+        bt = data["bt"]
+    except (KeyError, TypeError, ValueError):
+        return {"ok": False}
+    if amount <= 0 or price <= 0:
+        return {"ok": False}
+    shares = int(amount // price)
+    if shares <= 0:
+        return {"ok": False}
+    deployed = shares * price
+    strat = float(bt.get("strat_cum", 0))
+    buy_hold = float(bt.get("bh_cum", 0))
+    days = int(bt.get("days", 0))
+    return {
+        "ok": True,
+        "amount": amount,
+        "shares": shares,
+        "deployed_amount": deployed,
+        "strategy_profit": deployed * strat / 100,
+        "buy_hold_profit": deployed * buy_hold / 100,
+        "strategy_annualized": _annualized_percent(strat, days),
+        "buy_hold_annualized": _annualized_percent(buy_hold, days),
+    }
+
+
+def summarize_foreign_flow(df):
+    if "ForeignNet" not in df or df["ForeignNet"].abs().sum() == 0:
+        return {"available": False, "net_5": 0.0, "net_20": 0.0, "status": "資料不足", "source": "外資"}
+    net = pd.to_numeric(df["ForeignNet"], errors="coerce").fillna(0)
+    net_5 = float(net.tail(5).sum())
+    net_20 = float(net.tail(20).sum())
+    if net_5 > 0 and net_20 > 0:
+        status = "外資偏多"
+    elif net_5 < 0 and net_20 < 0:
+        status = "外資偏空"
+    else:
+        status = "外資中性"
+    return {"available": True, "net_5": net_5, "net_20": net_20, "status": status, "source": "外資"}
 
 def get_data(code, days=730):
     start_date = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
@@ -235,7 +297,7 @@ def get_news(name):
 
 def calc_all(df):
     df = df.copy()
-    for column in ["Volume", "InstitutionalNet", "MarginBalance", "ShortBalance"]:
+    for column in ["Volume", "InstitutionalNet", "ForeignNet", "MarginBalance", "ShortBalance"]:
         if column not in df:
             df[column] = 0.0
     c = df["Close"]
@@ -459,13 +521,14 @@ def _do_analyze(code):
     last = df.iloc[-1]
     name = get_stock_name(code)
     news = get_news(name)
-    
+
     s_score, s_status = analyze_sentiment(news)
     prob = last['AI_P']
     prob = int(max(0, min(100, prob)))
-    
+
     trend = "多頭" if last['Close'] > last['MA20'] else "空頭"
-    
+    foreign_flow = summarize_foreign_flow(df)
+
     tv_df = df.copy().reset_index()
     tv_df['Date'] = tv_df['Date'].dt.strftime('%Y-%m-%d')
     tv_df['Open'] = tv_df['Open'].fillna(tv_df['Close'])
@@ -485,18 +548,21 @@ def _do_analyze(code):
         curr_p += drift
         pred.append({'time': curr_d.strftime('%Y-%m-%d'), 'value': round(curr_p, 2)})
 
-    return {
+    result = {
         "code": code, "name": name, "price": last['Close'], "prob": prob,
         "as_of": df.index[-1].date().isoformat(),
         "bt": bt, "news": news, "trend": trend,
         "rsi": last['RSI'], "ma20": last['MA20'],
         "macd_osc": last['MACD_OSC'], "k": last['K'], "d": last['D'],
+        "foreign_flow": foreign_flow,
         "s_score": s_score, "s_status": s_status,
         "candles": json.dumps(tv_df[['Date','Open','High_corr','Low_corr','Close']].rename(columns={'Date':'time','Open':'open','High_corr':'high','Low_corr':'low','Close':'close'}).to_dict('records')),
         "ma20_line": json.dumps(tv_df[['Date','MA20']].dropna().rename(columns={'Date':'time','MA20':'value'}).to_dict('records')),
         "prob_h": json.dumps(tv_df[['Date','AI_P']].dropna().rename(columns={'Date':'time','AI_P':'value'}).to_dict('records')),
         "pred": json.dumps(pred)
     }
+    result["projection"] = calculate_investment_projection(100000, result)
+    return result
 
 def analyze(code):
     now = time.time()
@@ -864,6 +930,15 @@ def build_stock_flex_message(code, name, data, url, watched=False):
                 },
                 {
                     "type": "button",
+                    "style": "secondary",
+                    "action": {
+                        "type": "postback",
+                        "label": "投資試算",
+                        "data": f"calc:menu:{code}",
+                    }
+                },
+                {
+                    "type": "button",
                     "style": "primary",
                     "color": "#39c6a3",
                     "action": {
@@ -1012,6 +1087,57 @@ def build_alert_menu_flex(code, name):
                     for label, payload in choices
                 ],
             ],
+        },
+    }
+
+
+def build_calculator_menu_flex(code, name):
+    choices = [("1 萬", 10000), ("5 萬", 50000), ("10 萬", 100000)]
+    return {
+        "type": "bubble",
+        "size": "kilo",
+        "body": {
+            "type": "box", "layout": "vertical", "paddingAll": "18px", "spacing": "sm",
+            "contents": [
+                {"type": "text", "text": f"{name} 投資試算", "weight": "bold", "size": "lg", "wrap": True},
+                {"type": "text", "text": "請選擇投入金額，或點自訂金額查看輸入格式。", "color": "#64748b", "size": "sm", "wrap": True},
+                *[
+                    {"type": "button", "style": "secondary", "action": {
+                        "type": "postback", "label": label, "data": f"calc:amount:{code}:{amount}",
+                    }}
+                    for label, amount in choices
+                ],
+                {"type": "button", "style": "secondary", "action": {
+                    "type": "postback", "label": "自訂金額", "data": f"calc:custom:{code}",
+                }},
+            ],
+        },
+    }
+
+
+def build_projection_flex(code, name, data, amount, base_url):
+    projection = calculate_investment_projection(amount, data)
+    if not projection["ok"]:
+        return _empty_line_bubble("投資試算", "金額不足買進 1 股，請提高投入金額後再試。")
+    return {
+        "type": "bubble",
+        "size": "kilo",
+        "body": {
+            "type": "box", "layout": "vertical", "paddingAll": "18px", "spacing": "sm",
+            "contents": [
+                {"type": "text", "text": f"{name} ({code})", "weight": "bold", "size": "lg", "wrap": True},
+                {"type": "text", "text": f"投入 {projection['amount']:,.0f} 元，約可買 {projection['shares']:,} 股。", "color": "#0f766e", "weight": "bold", "size": "sm", "wrap": True},
+                {"type": "text", "text": f"AI 策略歷史估算損益：{projection['strategy_profit']:,.0f} 元", "color": "#64748b", "size": "sm", "wrap": True},
+                {"type": "text", "text": f"買進持有歷史估算損益：{projection['buy_hold_profit']:,.0f} 元", "color": "#64748b", "size": "sm", "wrap": True},
+                {"type": "text", "text": "這是歷史回測換算，不代表未來獲利。", "color": "#94a3b8", "size": "xs", "wrap": True},
+            ],
+        },
+        "footer": {
+            "type": "box", "layout": "vertical", "paddingAll": "14px",
+            "contents": [{"type": "button", "style": "primary", "color": "#39c6a3", "action": {
+                "type": "uri", "label": "查看完整分析",
+                "uri": f"{base_url.rstrip('/')}/stock/{code}",
+            }}],
         },
     }
 
@@ -1454,6 +1580,10 @@ def _reply_text(event, text):
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
 
 
+def _current_web_root():
+    return request.host_url.replace("http://", "https://").rstrip("/")
+
+
 def _require_same_pending(state, expected_pending):
     if state.get("pending") != expected_pending:
         raise StateError("提醒設定已變更，請重新操作。")
@@ -1490,10 +1620,8 @@ def handle_postback(event):
         return
 
     payload = getattr(getattr(event, "postback", None), "data", "")
-    stock_match = re.fullmatch(
-        r"(?:watch:(?:add|remove)|alert:menu):([A-Za-z0-9]+)",
-        payload,
-    )
+    stock_match = re.fullmatch(r"(?:watch:(?:add|remove)|alert:menu|calc:menu|calc:custom):([A-Za-z0-9]+)", payload)
+    calc_amount_match = re.fullmatch(r"calc:amount:([A-Za-z0-9]+):([0-9]+(?:\.[0-9]+)?)", payload)
     alert_start_match = re.fullmatch(
         r"alert:start:([A-Za-z0-9]+):(price|probability)",
         payload,
@@ -1504,7 +1632,7 @@ def handle_postback(event):
     )
     alert_remove_match = re.fullmatch(r"alert:remove:([0-9a-fA-F]{32})", payload)
 
-    if not any((stock_match, alert_start_match, alert_trend_match, alert_remove_match)):
+    if not any((stock_match, calc_amount_match, alert_start_match, alert_trend_match, alert_remove_match)):
         _reply_text(event, "無效的操作，請重新開啟功能選單。")
         return
 
@@ -1524,7 +1652,7 @@ def handle_postback(event):
             _reply_text(event, _store_error_text())
         return
 
-    match = stock_match or alert_start_match or alert_trend_match
+    match = stock_match or calc_amount_match or alert_start_match or alert_trend_match
     code, name = _resolve_postback_stock(match.group(1))
     if not code:
         _reply_text(event, "找不到這檔股票，請重新查詢後再操作。")
@@ -1536,6 +1664,34 @@ def handle_postback(event):
             FlexSendMessage(
                 alt_text=f"設定 {name} 提醒",
                 contents=build_alert_menu_flex(code, name),
+            ),
+        )
+        return
+
+    if payload == f"calc:menu:{code}":
+        line_bot_api.reply_message(
+            event.reply_token,
+            FlexSendMessage(
+                alt_text=f"{name} 投資試算",
+                contents=build_calculator_menu_flex(code, name),
+            ),
+        )
+        return
+
+    if payload == f"calc:custom:{code}":
+        _reply_text(event, f"請輸入：試算 {code} 100000\n把 100000 換成你的投入金額。")
+        return
+
+    if calc_amount_match:
+        data = analyze(code)
+        if not data:
+            _reply_text(event, "查無資料，請稍後再試。")
+            return
+        line_bot_api.reply_message(
+            event.reply_token,
+            FlexSendMessage(
+                alt_text=f"{name} 投資試算",
+                contents=build_projection_flex(code, name, data, calc_amount_match.group(2), _current_web_root()),
             ),
         )
         return
@@ -1655,6 +1811,28 @@ def handle_message(event):
             _reply_text(event, str(error))
         except StoreError:
             _reply_text(event, _store_error_text())
+        return
+
+    calc_text = re.fullmatch(r"試算\s+([A-Za-z0-9]+)\s+([0-9]+(?:\.[0-9]+)?)", msg)
+    if calc_text:
+        code, name = search_stock_code(calc_text.group(1))
+        if not code:
+            _reply_text(event, "找不到這檔股票，請重新查詢後再操作。")
+            return
+        data = analyze(code)
+        if not data:
+            _reply_text(event, "查無資料，請稍後再試。")
+            return
+        line_bot_api.reply_message(
+            event.reply_token,
+            FlexSendMessage(
+                alt_text=f"{name} 投資試算",
+                contents=build_projection_flex(code, name, data, calc_text.group(2), web_root),
+            ),
+        )
+        return
+    if msg.startswith("試算"):
+        _reply_text(event, "請用：試算 2330 100000，或先查詢股票後點選「投資試算」。")
         return
 
     if msg in ("大盤預測", "大盤", "今日盤勢"):
