@@ -123,10 +123,11 @@ class WebProductTests(unittest.TestCase):
         self.assertEqual(actual_uri, expected_uri)
         self.assertEqual(actual_message, {
             "我的關注": "我的關注",
-            "強勢訊號": "強勢訊號",
+            "產業預測": "預測",
             "提醒管理": "提醒管理",
             "投資試算": "投資試算",
         })
+        self.assertNotIn("強勢訊號", actual_message)
 
     def test_line_summary_card_has_one_clear_cta(self):
         card = stock_app.build_line_summary_card(

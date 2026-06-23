@@ -1491,7 +1491,7 @@ def build_line_navigation_flex(base_url):
     entries = [
         ("今日盤勢", "先看大盤趨勢與五日上漲機率", "查看盤勢", {"type": "uri", "label": "查看盤勢", "uri": f"{root}/market"}),
         ("我的關注", "在 LINE 內查看自選股票與條件提醒", "開啟關注", {"type": "message", "label": "開啟關注", "text": "我的關注"}),
-        ("強勢訊號", "查看關注清單內目前最強的標的", "查看訊號", {"type": "message", "label": "查看訊號", "text": "強勢訊號"}),
+        ("產業預測", "查看每日產業預測與分類機會", "選擇產業", {"type": "message", "label": "選擇產業", "text": "預測"}),
         ("提醒管理", "查看與取消已設定的提醒", "管理提醒", {"type": "message", "label": "管理提醒", "text": "提醒管理"}),
         ("投資試算", "用按鈕或自訂金額估算歷史損益", "開始試算", {"type": "message", "label": "開始試算", "text": "投資試算"}),
         ("完整分析", "進入量化儀表板做完整判讀", "開啟分析", {"type": "uri", "label": "開啟分析", "uri": f"{root}/dashboard"}),
