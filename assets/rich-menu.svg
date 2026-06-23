@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2500" height="1686" viewBox="0 0 2500 1686" role="img" aria-label="LINE 圖文選單六格設計稿">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07111f"/>
+      <stop offset="1" stop-color="#10233a"/>
+    </linearGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f1f33"/>
+      <stop offset="1" stop-color="#132b45"/>
+    </linearGradient>
+    <style>
+      .label{font:800 116px "Noto Sans TC","Microsoft JhengHei",sans-serif;fill:#eef6ff}
+      .hint{font:600 42px "Noto Sans TC","Microsoft JhengHei",sans-serif;fill:#8fa4bd}
+      .icon{font:700 104px "Noto Sans TC","Microsoft JhengHei",sans-serif;fill:#39c6a3}
+      .tile{fill:url(#tile);stroke:#25435f;stroke-width:4}
+    </style>
+  </defs>
+  <rect width="2500" height="1686" fill="url(#bg)"/>
+  <g transform="translate(42 42)">
+    <rect class="tile" x="0" y="0" width="790" height="770" rx="42"/>
+    <rect class="tile" x="810" y="0" width="790" height="770" rx="42"/>
+    <rect class="tile" x="1620" y="0" width="790" height="770" rx="42"/>
+    <rect class="tile" x="0" y="812" width="790" height="770" rx="42"/>
+    <rect class="tile" x="810" y="812" width="790" height="770" rx="42"/>
+    <rect class="tile" x="1620" y="812" width="790" height="770" rx="42"/>
+
+    <g transform="translate(84 130)">
+      <text class="icon" x="0" y="95">📈</text>
+      <text class="label" x="0" y="260">今日盤勢</text>
+      <text class="hint" x="0" y="342">大盤趨勢與五日機率</text>
+    </g>
+
+    <g transform="translate(894 130)">
+      <text class="icon" x="0" y="95">⭐</text>
+      <text class="label" x="0" y="260">我的關注</text>
+      <text class="hint" x="0" y="342">自選股與條件提醒</text>
+    </g>
+
+    <g transform="translate(1704 130)">
+      <text class="icon" x="0" y="95">🏭</text>
+      <text class="label" x="0" y="260">產業預測</text>
+      <text class="hint" x="0" y="342">每日產業機會排行</text>
+    </g>
+
+    <g transform="translate(84 942)">
+      <text class="icon" x="0" y="95">🔔</text>
+      <text class="label" x="0" y="260">提醒管理</text>
+      <text class="hint" x="0" y="342">查看與取消提醒</text>
+    </g>
+
+    <g transform="translate(894 942)">
+      <text class="icon" x="0" y="95">🧮</text>
+      <text class="label" x="0" y="260">投資試算</text>
+      <text class="hint" x="0" y="342">金額換算歷史損益</text>
+    </g>
+
+    <g transform="translate(1704 942)">
+      <text class="icon" x="0" y="95">📊</text>
+      <text class="label" x="0" y="260">完整分析</text>
+      <text class="hint" x="0" y="342">圖表、回測與建議</text>
+    </g>
+  </g>
+</svg>
