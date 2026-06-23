@@ -34,8 +34,10 @@ class WebProductTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         analyze.assert_not_called()
         html = response.get_data(as_text=True)
-        for label in ["市場摘要", "強勢訊號", "產業雷達", "我的關注", "最近提醒"]:
+        for label in ["市場摘要", "強勢訊號", "產業雷達"]:
             self.assertIn(label, html)
+        for web_only_removed in ["我的關注", "最近提醒", "data-watchlist", "data-alert-preview", "/watchlist"]:
+            self.assertNotIn(web_only_removed, html)
         self.assertIn('data-dashboard-endpoint="/api/dashboard"', html)
 
     @patch.object(stock_app, "analyze")
@@ -65,49 +67,50 @@ class WebProductTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        for label in ["五日上漲機率", "加入關注", "設定提醒", "技術指標", "模型解釋", "風險提醒"]:
+        for label in ["五日上漲機率", "技術指標", "模型解釋", "風險提醒"]:
             self.assertIn(label, html)
+        for web_only_removed in ["加入關注", "設定提醒", "data-watchlist-add", "data-alert-open"]:
+            self.assertNotIn(web_only_removed, html)
         self.assertIn("data-chart-range", html)
         self.assertIn("<details", html)
         self.assertIn("/static/app.css", html)
 
-    def test_watchlist_page_has_complete_alert_workflow_states(self):
-        response = stock_app.app.test_client().get("/watchlist")
+    def test_web_is_analysis_only_and_old_watchlist_redirects(self):
+        client = stock_app.app.test_client()
+        response = client.get("/watchlist")
 
-        self.assertEqual(response.status_code, 200)
-        html = response.get_data(as_text=True)
-        for marker in ["data-watchlist-list", "data-alert-list", "data-alert-form", "data-empty-state", "data-toast"]:
-            self.assertIn(marker, html)
-        for label in ["價格門檻", "機率門檻", "技術條件", "最近觸發"]:
-            self.assertIn(label, html)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.headers["Location"].endswith("/dashboard"))
 
-    @patch.object(stock_app, "analyze", return_value=analysis_data())
-    def test_stock_summary_api_returns_only_watchlist_fields(self, _analyze):
+    @patch.object(stock_app, "analyze")
+    def test_stock_summary_api_removed_with_browser_watchlist(self, analyze):
         response = stock_app.app.test_client().get("/api/stock/2330/summary")
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json(), {
-            "code": "2330", "name": "台積電", "price": 100.0,
-            "prob": 63, "trend": "多頭",
-        })
+        self.assertEqual(response.status_code, 404)
+        analyze.assert_not_called()
 
     def test_line_navigation_maps_four_entries_to_web_routes(self):
         navigation = stock_app.build_line_navigation_flex("https://example.com/")
 
         self.assertEqual(navigation["type"], "carousel")
         self.assertEqual(len(navigation["contents"]), 4)
-        expected = {
+        expected_uri = {
             "今日盤勢": "https://example.com/market",
             "熱門產業": "https://example.com/dashboard#sectors",
-            "我的關注": "https://example.com/watchlist",
             "完整分析": "https://example.com/dashboard",
         }
-        actual = {}
+        actual_uri = {}
+        actual_message = {}
         for card in navigation["contents"]:
             self.assertEqual(len(card["footer"]["contents"]), 1)
             action = card["footer"]["contents"][0]["action"]
-            actual[card["body"]["contents"][0]["text"]] = action["uri"]
-        self.assertEqual(actual, expected)
+            title = card["body"]["contents"][0]["text"]
+            if action["type"] == "uri":
+                actual_uri[title] = action["uri"]
+            else:
+                actual_message[title] = action["text"]
+        self.assertEqual(actual_uri, expected_uri)
+        self.assertEqual(actual_message, {"我的關注": "我的關注"})
 
     def test_line_summary_card_has_one_clear_cta(self):
         card = stock_app.build_line_summary_card(
@@ -126,10 +129,16 @@ class WebProductTests(unittest.TestCase):
         html = response.get_data(as_text=True)
         css = Path(stock_app.app.static_folder, "app.css").read_text(encoding="utf-8")
 
-        for marker in ['class="skip-link"', 'id="main-content"', 'aria-live="polite"', 'aria-atomic="true"']:
+        for marker in ['class="skip-link"', 'id="main-content"', 'aria-live="polite"']:
             self.assertIn(marker, html)
         for rule in [":focus-visible", "prefers-reduced-motion", "min-height:44px"]:
             self.assertIn(rule, css)
+
+    def test_browser_bundle_has_no_local_watchlist_storage(self):
+        source = Path(stock_app.app.static_folder, "app.js").read_text(encoding="utf-8")
+
+        for removed in ["localStorage", "quant-watchlist", "data-watchlist", "data-alert-open", "data-alert-form"]:
+            self.assertNotIn(removed, source)
 
 
 if __name__ == "__main__":

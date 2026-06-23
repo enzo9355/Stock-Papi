@@ -5,7 +5,6 @@
 <div class="page stock-page" data-stock-code="{{ d.code }}" data-stock-name="{{ d.name }}" data-stock-price="{{ '%.2f'|format(d.price) }}" data-stock-prob="{{ d.prob }}">
   <header class="stock-header">
     <div><a class="back-link" href="{{ url_for('dashboard_page') }}">← 返回總覽</a><p class="eyebrow">{{ d.code }}</p><h1>{{ d.name }}</h1><p class="muted">最新收盤 {{ '%.2f'|format(d.price) }} · {{ d.trend }}</p></div>
-    <div class="stock-actions"><button class="button secondary" data-watchlist-add>＋ 加入關注</button><button class="button primary" data-alert-open>設定提醒</button></div>
   </header>
 
   <section class="decision-strip" aria-label="預測摘要">

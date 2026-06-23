@@ -21,7 +21,7 @@ import google.generativeai as genai
 
 from sklearn.model_selection import TimeSeriesSplit
 from lightgbm import LGBMClassifier
-from flask import Flask, request, abort, render_template, jsonify
+from flask import Flask, request, abort, render_template, jsonify, redirect
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
@@ -1153,8 +1153,9 @@ def run_alert_checks(store, analyze_fn, push_fn, today, base_url):
     if push_failed:
         raise RuntimeError("部分 LINE 提醒發送失敗")
 
-def build_line_summary_card(title, lines, cta_label, url, accent="#39c6a3"):
-    """建立只有一個 Web CTA 的 LINE 摘要卡。"""
+def build_line_summary_card(title, lines, cta_label, url, accent="#39c6a3", action=None):
+    """建立只有一個主要動作的 LINE 摘要卡。"""
+    action = action or {"type": "uri", "label": cta_label, "uri": url}
     return {
         "type": "bubble",
         "size": "kilo",
@@ -1176,7 +1177,7 @@ def build_line_summary_card(title, lines, cta_label, url, accent="#39c6a3"):
             "type": "box", "layout": "vertical", "backgroundColor": "#0d1a2b",
             "paddingAll": "14px", "contents": [{
                 "type": "button", "style": "primary", "color": accent,
-                "action": {"type": "uri", "label": cta_label, "uri": url},
+                "action": action,
             }],
         },
     }
@@ -1185,14 +1186,14 @@ def build_line_navigation_flex(base_url):
     """Rich Menu 四個入口的可預覽 Flex 版本。"""
     root = base_url.rstrip("/")
     entries = [
-        ("今日盤勢", "先看大盤趨勢與五日上漲機率", "查看盤勢", f"{root}/market"),
-        ("熱門產業", "快速比較近期訊號較強的產業", "查看產業", f"{root}/dashboard#sectors"),
-        ("我的關注", "追蹤自選股票與條件提醒", "開啟關注", f"{root}/watchlist"),
-        ("完整分析", "進入量化儀表板做完整判讀", "開啟分析", f"{root}/dashboard"),
+        ("今日盤勢", "先看大盤趨勢與五日上漲機率", "查看盤勢", {"type": "uri", "label": "查看盤勢", "uri": f"{root}/market"}),
+        ("熱門產業", "快速比較近期訊號較強的產業", "查看產業", {"type": "uri", "label": "查看產業", "uri": f"{root}/dashboard#sectors"}),
+        ("我的關注", "在 LINE 內查看自選股票與條件提醒", "開啟關注", {"type": "message", "label": "開啟關注", "text": "我的關注"}),
+        ("完整分析", "進入量化儀表板做完整判讀", "開啟分析", {"type": "uri", "label": "開啟分析", "uri": f"{root}/dashboard"}),
     ]
     return {
         "type": "carousel",
-        "contents": [build_line_summary_card(title, [description], cta, url) for title, description, cta, url in entries],
+        "contents": [build_line_summary_card(title, [description], cta, root, action=action) for title, description, cta, action in entries],
     }
 
 def build_welcome_flex():
@@ -1340,7 +1341,7 @@ def dashboard_page():
 
 @app.route("/watchlist")
 def watchlist_page():
-    return render_template("watchlist.html")
+    return redirect("/dashboard", code=302)
 
 @app.route("/api/dashboard")
 def dashboard_api():
@@ -1359,21 +1360,6 @@ def dashboard_api():
         },
         "opportunities": cached_opportunities(),
         "sectors": sectors,
-    })
-
-@app.route("/api/stock/<code>/summary")
-def stock_summary_api(code):
-    if code not in twstock.codes:
-        abort(404)
-    data = analyze(code)
-    if not data:
-        return jsonify({"error": "stock data unavailable"}), 503
-    return jsonify({
-        "code": code,
-        "name": data["name"],
-        "price": float(data["price"]),
-        "prob": int(data["prob"]),
-        "trend": data["trend"],
     })
 
 @app.route("/stock/<code>")
