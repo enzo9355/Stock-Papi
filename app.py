@@ -2454,7 +2454,7 @@ def handle_message(event):
             _reply_text(event, _store_error_text())
         return
 
-    papi_match = re.fullmatch(r"(?i)papi\s+(.+)", msg)
+    papi_match = re.fullmatch(r"(?i)papi\s*(.+)", msg)
     if papi_match:
         prompt = papi_match.group(1).strip()
         if _is_crypto_query(prompt):
