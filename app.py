@@ -951,6 +951,21 @@ def call_openalice(prompt):
     return f"Papi 分析\n{summary}" + (f"\n\n詳細分析：{detail_url}" if detail_url else "")
 
 
+def _extract_stock_from_papi_prompt(prompt):
+    """Try to extract a stock code from a Papi prompt like '分析 2330' or '分析 台積電'."""
+    m = re.search(r"分析\s+(.+)", prompt)
+    if m:
+        keyword = m.group(1).strip()
+        code, name = search_stock_code(keyword)
+        if code:
+            return code, name
+    # Also try if the entire prompt is just a stock code or name
+    code, name = search_stock_code(prompt)
+    if code:
+        return code, name
+    return None, None
+
+
 def call_papi_gemini_fallback(prompt):
     if not gemini_model:
         return None
@@ -960,17 +975,52 @@ def call_papi_gemini_fallback(prompt):
         {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
     ]
-    response = gemini_model.generate_content(
-        f"""你是 Stock Papi，負責替 LINE bot 使用者做台股研究摘要。
+
+    # Try to extract a stock code and enrich with quantitative data
+    code, name = _extract_stock_from_papi_prompt(prompt)
+    data_context = ""
+    if code:
+        data = analyze(code)
+        if data:
+            bt = data.get("bt", {})
+            news_titles = "\n".join(
+                [f"- {n['title']}" for n in data.get("news", [])[:5]]
+            )
+            foreign = data.get("foreign_flow", {})
+            foreign_str = ""
+            if foreign.get("available"):
+                foreign_str = f"外資買賣超狀態：{foreign.get('status', '未知')}（近5日淨額 {foreign.get('net_5', 0):.0f}）"
+
+            data_context = f"""
+以下是 {name} ({code}) 的最新量化分析數據（來自我們的 LightGBM 模型與技術指標系統）：
+- 最新收盤價：{data['price']:.2f}
+- AI 五日上漲機率：{data['prob']}%
+- 當前趨勢：{data['trend']}
+- RSI：{data['rsi']:.1f}
+- MACD 柱狀體：{'紅柱 (多頭動能)' if data['macd_osc'] > 0 else '綠柱 (空頭動能)'}
+- KD 指標：K={data['k']:.1f}, D={data['d']:.1f}（{'黃金交叉' if data['k'] > data['d'] else '死亡交叉'}）
+- 均線狀態：{'站上 MA20（支撐強）' if data['price'] > data['ma20'] else '跌破 MA20（壓力大）'}
+- 新聞情緒：{data['s_status']}（分數 {data['s_score']:.1f}）
+- {foreign_str}
+- 回測績效（近 {bt.get('days', '?')} 交易日）：策略報酬 {bt.get('strat_cum', 0):.1f}%，買進持有報酬 {bt.get('bh_cum', 0):.1f}%，勝率 {bt.get('win_rate', 0):.0f}%，夏普值 {bt.get('sharpe', 0):.2f}
+- 回測結論：{bt.get('conclusion', '無')}
+最近相關新聞：
+{news_titles or '暫無新聞'}
+
+請根據以上「真實數據」來回答使用者的問題。數據是核心依據，你的角色是用白話文幫新手解讀這些數據。
+"""
+
+    full_prompt = f"""你是 Stock Papi，負責替 LINE bot 使用者做台股研究摘要。
 請用繁體中文、冷靜、具體、適合新手的語氣回答。
 限制：
 - 不要分析虛擬貨幣。
 - 不要承諾報酬或給絕對買賣指令。
 - 用 3 到 5 行，先講結論，再講主要理由與風險。
+- 如果有提供量化數據，務必引用具體數字（如勝率、RSI 值）來支撐你的論點。
+{data_context}
+使用者問題：{prompt}"""
 
-使用者問題：{prompt}""",
-        safety_settings=safety,
-    )
+    response = gemini_model.generate_content(full_prompt, safety_settings=safety)
     summary = (getattr(response, "text", "") or "").strip()
     if not summary:
         return None
