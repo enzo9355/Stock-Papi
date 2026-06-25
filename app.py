@@ -947,11 +947,11 @@ def call_openalice(prompt):
     ).strip()
     detail_url = str(payload.get("detail_url") or payload.get("url") or "").strip()
     if not summary:
-        summary = "Alice 沒有回傳可用摘要。"
-    return f"Alice 分析\n{summary}" + (f"\n\n詳細分析：{detail_url}" if detail_url else "")
+        summary = "Papi 沒有回傳可用摘要。"
+    return f"Papi 分析\n{summary}" + (f"\n\n詳細分析：{detail_url}" if detail_url else "")
 
 
-def call_alice_gemini_fallback(prompt):
+def call_papi_gemini_fallback(prompt):
     if not gemini_model:
         return None
     safety = [
@@ -961,7 +961,7 @@ def call_alice_gemini_fallback(prompt):
         {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
     ]
     response = gemini_model.generate_content(
-        f"""你是 Alice，負責替 LINE bot 使用者做台股研究摘要。
+        f"""你是 Stock Papi，負責替 LINE bot 使用者做台股研究摘要。
 請用繁體中文、冷靜、具體、適合新手的語氣回答。
 限制：
 - 不要分析虛擬貨幣。
@@ -974,7 +974,7 @@ def call_alice_gemini_fallback(prompt):
     summary = (getattr(response, "text", "") or "").strip()
     if not summary:
         return None
-    return f"Alice 分析\n{summary}"
+    return f"Papi 分析\n{summary}"
 
 
 def sector_signal_score(data):
@@ -2300,22 +2300,23 @@ def handle_message(event):
             _reply_text(event, _store_error_text())
         return
 
-    alice_match = re.fullmatch(r"(?i)alice\s+(.+)", msg)
-    if alice_match:
-        prompt = alice_match.group(1).strip()
+    papi_match = re.fullmatch(r"(?i)papi\s+(.+)", msg)
+    if papi_match:
+        prompt = papi_match.group(1).strip()
         if _is_crypto_query(prompt):
-            _reply_text(event, "Alice 分析目前不支援虛擬貨幣。")
+            _reply_text(event, "Papi 分析目前不支援虛擬貨幣。")
         elif OPENALICE_API_URL and OPENALICE_API_TOKEN:
             try:
                 _reply_text(event, call_openalice(prompt))
             except (requests.RequestException, ValueError, TypeError):
-                _reply_text(event, "Alice 分析服務暫時無法回應，請稍後再試。")
+                _reply_text(event, "Papi 分析服務暫時無法回應，請稍後再試。")
         else:
             try:
-                reply = call_alice_gemini_fallback(prompt)
-                _reply_text(event, reply or "Alice 分析服務尚未設定。")
-            except Exception:
-                _reply_text(event, "Alice 分析服務暫時無法回應，請稍後再試。")
+                reply = call_papi_gemini_fallback(prompt)
+                _reply_text(event, reply or "Papi 分析服務尚未設定。")
+            except Exception as exc:
+                print(f"Papi Gemini fallback failed: {exc}")
+                _reply_text(event, "Papi AI 摘要暫時失敗；你仍可直接輸入股票代號查看完整量化分析。")
         return
 
     calc_text = re.fullmatch(r"試算\s+([A-Za-z0-9]+)\s+([0-9]+(?:\.[0-9]+)?)", msg)

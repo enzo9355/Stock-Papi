@@ -572,7 +572,7 @@ class MessageFlowTests(unittest.TestCase):
 
         self.assertIn("約可買", flex_text(line_api.reply_message.call_args.args[1]))
 
-    def test_alice_command_replies_with_openalice_summary(self):
+    def test_papi_command_replies_with_openalice_summary(self):
         line_api = Mock()
         response = Mock()
         response.raise_for_status.return_value = None
@@ -586,16 +586,16 @@ class MessageFlowTests(unittest.TestCase):
              patch.object(stock_app, "OPENALICE_API_URL", "https://alice.example/api/analyze", create=True), \
              patch.object(stock_app, "OPENALICE_API_TOKEN", "secret", create=True), \
              patch.object(stock_app.requests, "post", return_value=response) as post:
-            stock_app.handle_message(message_event("Alice 分析 2330"))
+            stock_app.handle_message(message_event("Papi 分析 2330"))
 
         post.assert_called_once()
         self.assertEqual(post.call_args.kwargs["json"]["prompt"], "分析 2330")
         text = line_api.reply_message.call_args.args[1].text
-        self.assertIn("Alice 分析", text)
+        self.assertIn("Papi 分析", text)
         self.assertIn("台積電短線偏多", text)
         self.assertIn("https://alice.example/reports/2330", text)
 
-    def test_alice_command_requires_configuration(self):
+    def test_papi_command_requires_configuration(self):
         line_api = Mock()
         with stock_app.app.test_request_context("/callback", base_url="https://example.com/"), \
              patch.object(stock_app, "line_store", None), \
@@ -604,12 +604,12 @@ class MessageFlowTests(unittest.TestCase):
              patch.object(stock_app, "OPENALICE_API_TOKEN", None, create=True), \
              patch.object(stock_app, "gemini_model", None), \
              patch.object(stock_app.requests, "post") as post:
-            stock_app.handle_message(message_event("Alice 今日市場摘要"))
+            stock_app.handle_message(message_event("Papi 今日市場摘要"))
 
         post.assert_not_called()
-        self.assertIn("Alice 分析服務尚未設定", line_api.reply_message.call_args.args[1].text)
+        self.assertIn("Papi 分析服務尚未設定", line_api.reply_message.call_args.args[1].text)
 
-    def test_alice_command_uses_gemini_fallback_without_openalice_api(self):
+    def test_papi_command_uses_gemini_fallback_without_openalice_api(self):
         line_api = Mock()
         gemini = Mock()
         gemini.generate_content.return_value.text = "台積電短線偏多，但追價風險升高。"
@@ -620,15 +620,33 @@ class MessageFlowTests(unittest.TestCase):
              patch.object(stock_app, "OPENALICE_API_TOKEN", None, create=True), \
              patch.object(stock_app, "gemini_model", gemini), \
              patch.object(stock_app.requests, "post") as post:
-            stock_app.handle_message(message_event("Alice 分析 2330"))
+            stock_app.handle_message(message_event("Papi 分析 2330"))
 
         post.assert_not_called()
         gemini.generate_content.assert_called_once()
         text = line_api.reply_message.call_args.args[1].text
-        self.assertIn("Alice 分析", text)
+        self.assertIn("Papi 分析", text)
         self.assertIn("台積電短線偏多", text)
 
-    def test_alice_command_rejects_crypto_requests(self):
+    def test_papi_command_returns_degraded_reply_when_gemini_fails(self):
+        line_api = Mock()
+        gemini = Mock()
+        gemini.generate_content.side_effect = RuntimeError("gemini down")
+        with stock_app.app.test_request_context("/callback", base_url="https://example.com/"), \
+             patch.object(stock_app, "line_store", None), \
+             patch.object(stock_app, "line_bot_api", line_api), \
+             patch.object(stock_app, "OPENALICE_API_URL", None, create=True), \
+             patch.object(stock_app, "OPENALICE_API_TOKEN", None, create=True), \
+             patch.object(stock_app, "gemini_model", gemini), \
+             patch.object(stock_app.requests, "post") as post:
+            stock_app.handle_message(message_event("Papi 分析 2330"))
+
+        post.assert_not_called()
+        text = line_api.reply_message.call_args.args[1].text
+        self.assertIn("Papi AI 摘要暫時失敗", text)
+        self.assertNotIn("服務暫時無法回應", text)
+
+    def test_papi_command_rejects_crypto_requests(self):
         line_api = Mock()
         with stock_app.app.test_request_context("/callback", base_url="https://example.com/"), \
              patch.object(stock_app, "line_store", None), \
@@ -636,7 +654,7 @@ class MessageFlowTests(unittest.TestCase):
              patch.object(stock_app, "OPENALICE_API_URL", "https://alice.example/api/analyze", create=True), \
              patch.object(stock_app, "OPENALICE_API_TOKEN", "secret", create=True), \
              patch.object(stock_app.requests, "post") as post:
-            stock_app.handle_message(message_event("Alice 分析 BTC"))
+            stock_app.handle_message(message_event("Papi 分析 BTC"))
 
         post.assert_not_called()
         self.assertIn("不支援虛擬貨幣", line_api.reply_message.call_args.args[1].text)
