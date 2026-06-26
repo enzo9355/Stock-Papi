@@ -50,7 +50,7 @@
         <article><span>RSI 強弱</span><strong>{{ '%.1f'|format(d.rsi) }}</strong><small>{{ '偏強' if d.rsi >= 55 else '偏弱' if d.rsi < 45 else '中性' }}</small></article>
         <article><span>MACD 動能</span><strong>{{ '紅柱' if d.macd_osc > 0 else '綠柱' }}</strong><small>{{ '多方動能' if d.macd_osc > 0 else '空方動能' }}</small></article>
         <article><span>KD 訊號</span><strong>{{ '黃金交叉' if d.k > d.d else '死亡交叉' }}</strong><small>K {{ '%.1f'|format(d.k) }} · D {{ '%.1f'|format(d.d) }}</small></article>
-        <article><span>新聞情緒</span><strong>{{ '%.0f'|format(d.s_score) }}</strong><small>{{ d.s_status }}</small></article>
+        <article><span>新聞情緒</span><strong>{{ '%.0f'|format(d.s_score) }}</strong><small>{{ d.s_status }} · {{ d.get('news_count', d.news|length) }} 則 · 可信度{{ d.get('news_confidence', '低') }}</small></article>
       </div>
     </section>
 
@@ -64,7 +64,7 @@
 
   <section class="panel risk-panel"><div><p class="eyebrow">RISK CHECK</p><h2>風險提醒</h2></div><p>{{ d.bt.conclusion }}</p><ul><li>預測期間為五個交易日，短線波動可能偏離模型。</li><li>交易成本與突發事件可能降低實際績效。</li><li>請搭配部位控管，不要只依單一機率下單。</li></ul></section>
 
-  <section class="panel"><div class="section-heading"><div><p class="eyebrow">NEWS</p><h2>近期新聞</h2></div><span class="muted small">情緒僅供輔助，不修改模型機率</span></div><div class="news-list">{% for item in d.news %}<a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a>{% else %}<div class="empty-state">目前沒有相關新聞</div>{% endfor %}</div></section>
+  <section class="panel"><div class="section-heading"><div><p class="eyebrow">NEWS</p><h2>近期新聞</h2></div><span class="muted small">正面 {{ (d.get('news_positive_ratio', 0) * 100)|round|int }}%｜負面 {{ (d.get('news_negative_ratio', 0) * 100)|round|int }}%｜情緒不修改模型機率</span></div><div class="news-list">{% for item in d.news %}<a href="{{ item.link }}" target="_blank" rel="noopener noreferrer"><span>{{ item.normalized_title or item.title }}</span><small class="muted" style="display:block;margin-top:5px">{{ item.source or '來源未知' }} · {{ item.published_at[:10] if item.published_at else '時間未知' }} · {{ '正向' if item.direction == 'positive' else '負向' if item.direction == 'negative' else '中性' }}</small></a>{% else %}<div class="empty-state">目前沒有相關新聞</div>{% endfor %}</div></section>
 
   <script id="stock-chart-data" type="application/json">{{ {"candles": d.candles, "ma20": d.ma20_line, "prediction": d.pred}|tojson }}</script>
 </div>

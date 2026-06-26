@@ -458,13 +458,22 @@ class PredictionPipelineTests(unittest.TestCase):
             patch.object(stock_app, "get_data", return_value=frame),
             patch.object(stock_app, "calc_all", return_value=frame),
             patch.object(stock_app, "run_ai_engine", return_value=backtest),
-            patch.object(stock_app, "get_news", return_value=[]),
+            patch.object(stock_app, "get_news", return_value=[{
+                "title": "營收創新高",
+                "link": "#",
+                "source": "財經報",
+                "published_at": "2026-06-27T00:00:00+00:00",
+                "age_hours": 1,
+            }]),
             patch.object(stock_app, "analyze_sentiment", return_value=(80, "樂觀")),
         ):
             result = stock_app._do_analyze("2330")
 
         self.assertEqual(result["prob"], 55)
         self.assertEqual(len(json.loads(result["prob_h"])), 1)
+        self.assertIn("news_neutral_ratio", result)
+        self.assertIn("news_confidence", result)
+        self.assertEqual(result["news"][0]["direction"], "positive")
 
     def test_analyze_sentiment_returns_breakdown_without_model_side_effects(self):
         news = [
@@ -561,6 +570,40 @@ class PredictionPipelineTests(unittest.TestCase):
         self.assertIn("五日方向準確率", html)
         self.assertIn("Brier Score", html)
         self.assertNotIn("AI 勝率", rendered)
+
+    def test_line_and_web_render_sentiment_breakdown(self):
+        data = sample_analysis_data([{
+            "title": "台積電營收創新高 - 財經報",
+            "normalized_title": "台積電營收創新高",
+            "link": "https://example.com/news",
+            "source": "財經報",
+            "published_at": "2026-06-27T00:00:00+00:00",
+            "direction": "positive",
+            "matched_positive_terms": ["新高"],
+        }])
+        data.update({
+            "s_score": 68.0,
+            "s_status": "偏多",
+            "news_count": 12,
+            "news_positive_ratio": 0.58,
+            "news_negative_ratio": 0.17,
+            "news_neutral_ratio": 0.25,
+            "news_confidence": "中",
+            "news_confidence_score": 64.0,
+        })
+
+        with stock_app.app.app_context():
+            html = stock_app.render_web(data)
+        flex = stock_app.build_stock_flex_message(
+            "2330", "台積電", data, "https://example.com"
+        )
+        rendered = html + json.dumps(flex, ensure_ascii=False)
+
+        self.assertIn("12 則｜正面 58%｜負面 17%｜可信度中", rendered)
+        self.assertIn("財經報", html)
+        self.assertIn("2026-06-27", html)
+        self.assertIn("正向", html)
+        self.assertNotIn("matched_positive_terms", html)
 
     def test_external_news_is_escaped_without_template_evaluation(self):
         data = sample_analysis_data(

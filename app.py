@@ -876,6 +876,7 @@ def _do_analyze(code):
     news = get_news(name)
 
     sentiment = analyze_sentiment_detail(news)
+    news = sentiment["items"]
     s_score, s_status = sentiment["score"], sentiment["status"]
     prob = last['AI_P']
     prob = int(max(0, min(100, prob)))
@@ -913,6 +914,9 @@ def _do_analyze(code):
         "news_count": sentiment["count"],
         "news_positive_ratio": sentiment["positive_ratio"],
         "news_negative_ratio": sentiment["negative_ratio"],
+        "news_neutral_ratio": sentiment["neutral_ratio"],
+        "news_confidence_score": sentiment["confidence_score"],
+        "news_confidence": sentiment["confidence"],
         "candles": json.dumps(tv_df[['Date','Open','High_corr','Low_corr','Close']].rename(columns={'Date':'time','Open':'open','High_corr':'high','Low_corr':'low','Close':'close'}).to_dict('records')),
         "ma20_line": json.dumps(tv_df[['Date','MA20']].dropna().rename(columns={'Date':'time','MA20':'value'}).to_dict('records')),
         "prob_h": json.dumps(tv_df[['Date','AI_P']].dropna().rename(columns={'Date':'time','AI_P':'value'}).to_dict('records')),
@@ -948,10 +952,25 @@ def market_forecast(): return analyze("TAIEX")
 # ==================================================
 def render_web(d):
     bt = d['bt']
-    news_html = "".join(
-        f'<a href="{escape(str(n["link"]), quote=True)}" target="_blank" rel="noopener noreferrer" class="news-link">🔹 {escape(str(n["title"]))}</a>'
-        for n in d['news']
-    ) if d['news'] else "暫無相關新聞"
+    news_blocks = []
+    direction_labels = {"positive": "正向", "negative": "負向", "neutral": "中性"}
+    for n in d['news']:
+        title = n.get("normalized_title") or n.get("title", "")
+        source = n.get("source") or "來源未知"
+        published = str(n.get("published_at") or "")[:10] or "時間未知"
+        direction = direction_labels.get(n.get("direction"), "中性")
+        news_blocks.append(
+            f'<a href="{escape(str(n.get("link", "")), quote=True)}" target="_blank" rel="noopener noreferrer" class="news-link">'
+            f'🔹 {escape(str(title))}<small style="display:block;color:#94a3b8;margin-top:4px;">'
+            f'{escape(str(source))} · {escape(published)} · {direction}</small></a>'
+        )
+    news_html = "".join(news_blocks) if news_blocks else "暫無相關新聞"
+    sentiment_summary = (
+        f'{d.get("news_count", len(d["news"]))} 則｜'
+        f'正面 {round(d.get("news_positive_ratio", 0) * 100)}%｜'
+        f'負面 {round(d.get("news_negative_ratio", 0) * 100)}%｜'
+        f'可信度{d.get("news_confidence", "低")}'
+    )
     
     html = f"""
 <!DOCTYPE html>
@@ -1031,7 +1050,8 @@ def render_web(d):
     <h2>📰 相關即時新聞與情緒分析</h2>
     <div style="margin-bottom: 15px; background: rgba(255,255,255,0.05); padding: 15px; border-radius: 12px; border-left: 4px solid {'#ef5350' if d['s_score']<40 else '#26a69a'};">
         <span style="color: #aaa; font-size: 14px;">市場情緒分數</span><br>
-        <span style="font-size: 24px; font-weight: bold; color: {'#ef5350' if d['s_score']<40 else '#26a69a'};">{d['s_score']:.1f} ({d['s_status']})</span>
+        <span style="font-size: 24px; font-weight: bold; color: {'#ef5350' if d['s_score']<40 else '#26a69a'};">{d['s_score']:.1f} ({d['s_status']})</span><br>
+        <span style="color:#94a3b8;font-size:13px;">{sentiment_summary}</span>
     </div>
     {news_html}
 </div>
@@ -1520,6 +1540,12 @@ def build_stock_flex_message(code, name, data, url, watched=False):
     color_prob = "#10b981" if data['prob'] >= 50 else "#ef4444"
     color_s = "#10b981" if data['s_score'] >= 50 else "#ef4444"
     color_trend = "#10b981" if "多" in data['trend'] else "#ef4444"
+    sentiment_summary = (
+        f"{data.get('news_count', len(data.get('news', [])))} 則｜"
+        f"正面 {round(data.get('news_positive_ratio', 0) * 100)}%｜"
+        f"負面 {round(data.get('news_negative_ratio', 0) * 100)}%｜"
+        f"可信度{data.get('news_confidence', '低')}"
+    )
 
     return {
         "type": "bubble",
@@ -1569,6 +1595,14 @@ def build_stock_flex_message(code, name, data, url, watched=False):
                         { "type": "text", "text": "🌡 新聞情緒", "color": "#64748b", "size": "sm", "flex": 4 },
                         { "type": "text", "text": f"{data['s_status']} ({data['s_score']:.1f})", "color": color_s, "size": "md", "weight": "bold", "align": "end", "flex": 5 }
                     ]
+                },
+                {
+                    "type": "text",
+                    "text": sentiment_summary,
+                    "color": "#64748b",
+                    "size": "xs",
+                    "align": "end",
+                    "wrap": True
                 },
                 { "type": "separator", "margin": "md", "color": "#cbd5e1" },
                 {
