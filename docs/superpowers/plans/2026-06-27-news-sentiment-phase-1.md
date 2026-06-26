@@ -1,6 +1,6 @@
 # News Sentiment Phase 1 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Replace the three-label keyword sentiment result with a five-level, weighted, explainable news sentiment score while preserving the existing prediction probability.
 
@@ -16,7 +16,7 @@
 - Modify: `app.py:436-443`
 - Test: `tests/test_prediction_pipeline.py`
 
-- [ ] **Step 1: Write failing parser and deduplication tests**
+- [x] **Step 1: Write failing parser and deduplication tests**
 
 Add tests that pass XML directly to `parse_news_items()` and assert that source, UTC publication time, age, missing flags, normalized title, and `duplicate_count` are preserved. Include an item without source/date and two identical normalized titles.
 
@@ -39,7 +39,7 @@ def test_parse_news_items_preserves_metadata_and_missing_flags(self):
     self.assertEqual(deduped[0]["duplicate_count"], 1)
 ```
 
-- [ ] **Step 2: Run the parser test and verify RED**
+- [x] **Step 2: Run the parser test and verify RED**
 
 Run:
 
@@ -50,7 +50,7 @@ $env:PYTHONPATH='C:\Users\enzo\Documents\line bot\.deps'
 
 Expected: error because `parse_news_items` does not exist.
 
-- [ ] **Step 3: Implement the minimum parser pipeline**
+- [x] **Step 3: Implement the minimum parser pipeline**
 
 Add `email.utils.parsedate_to_datetime`, then implement:
 
@@ -124,7 +124,7 @@ def get_news(name):
         return []
 ```
 
-- [ ] **Step 4: Run parser and XML security tests and verify GREEN**
+- [x] **Step 4: Run parser and XML security tests and verify GREEN**
 
 Run the new parser test and `test_news_rejects_xml_entity_expansion`; expected: both pass.
 
@@ -134,7 +134,7 @@ Run the new parser test and `test_news_rejects_xml_entity_expansion`; expected: 
 - Modify: `app.py:658-703`
 - Test: `tests/test_prediction_pipeline.py`
 
-- [ ] **Step 1: Write failing score and aggregate tests**
+- [x] **Step 1: Write failing score and aggregate tests**
 
 Add focused tests for negation, event/time/source weights, five-level labels, and low-confidence empty input:
 
@@ -158,11 +158,11 @@ def test_aggregate_news_sentiment_returns_five_levels_and_confidence(self):
     self.assertEqual(empty["confidence"], "低")
 ```
 
-- [ ] **Step 2: Run both tests and verify RED**
+- [x] **Step 2: Run both tests and verify RED**
 
 Expected: errors because `score_news_item` and `aggregate_news_sentiment` do not exist.
 
-- [ ] **Step 3: Implement minimal scoring and aggregation**
+- [x] **Step 3: Implement minimal scoring and aggregation**
 
 Use module-level tuples for positive phrases, negative phrases, negations, major events, and opinion terms. `score_news_item()` returns the requested intermediate fields, clamps `raw_score` to `[-1, 1]`, applies the approved time/source/event weights, and calculates `final_weight`.
 
@@ -241,7 +241,7 @@ def aggregate_news_sentiment(items):
     return {"score": score, "status": status, "count": count, "positive_ratio": positive_ratio, "negative_ratio": negative_ratio, "neutral_ratio": 1 - positive_ratio - negative_ratio, "confidence_score": confidence_score, "confidence": "高" if confidence_score >= 75 else "中" if confidence_score >= 45 else "低", "items": items}
 ```
 
-- [ ] **Step 4: Run all sentiment tests and verify GREEN**
+- [x] **Step 4: Run all sentiment tests and verify GREEN**
 
 Run every `test_*sentiment*`, parser test, and the probability non-mutation test. Expected: all pass.
 
@@ -253,19 +253,19 @@ Run every `test_*sentiment*`, parser test, and the probability non-mutation test
 - Modify: `templates/stock_detail.html:46-67`
 - Modify: `tests/test_prediction_pipeline.py`
 
-- [ ] **Step 1: Write failing output tests**
+- [x] **Step 1: Write failing output tests**
 
 Update sample payloads with `news_neutral_ratio`, `news_confidence`, and `news_confidence_score`. Assert LINE contains `12 則｜正面 58%｜負面 17%｜可信度中`; assert Web contains source, publication time, direction, and the same summary fields without exposing `matched_positive_terms`.
 
-- [ ] **Step 2: Run output tests and verify RED**
+- [x] **Step 2: Run output tests and verify RED**
 
 Expected: assertions fail because the new summary and metadata are not rendered.
 
-- [ ] **Step 3: Implement minimum output changes**
+- [x] **Step 3: Implement minimum output changes**
 
 Thread the new aggregate fields through `_do_analyze()`. In the existing LINE Flex builder, keep the sentiment title row and add one small summary line. In `stock_detail.html`, extend the sentiment card and each news link with source, publication time, and direction. Do not add formatter wrappers.
 
-- [ ] **Step 4: Run output tests and verify GREEN**
+- [x] **Step 4: Run output tests and verify GREEN**
 
 Expected: focused LINE/Web tests pass and external text escaping remains intact.
 
@@ -275,11 +275,11 @@ Expected: focused LINE/Web tests pass and external text escaping remains intact.
 - Modify: `README.md`
 - Test: all tests
 
-- [ ] **Step 1: Update README behavior notes**
+- [x] **Step 1: Update README behavior notes**
 
 Document five-level sentiment, source/time weighting, confidence, and the rule that sentiment does not modify five-day probability.
 
-- [ ] **Step 2: Run full suite**
+- [x] **Step 2: Run full suite**
 
 Run:
 
@@ -290,11 +290,11 @@ $env:PYTHONPATH='C:\Users\enzo\Documents\line bot\.deps'
 
 Expected: all tests pass. Existing `google.generativeai` and LINE SDK deprecation warnings may remain; no new warning is introduced by this feature.
 
-- [ ] **Step 3: Verify diff and second review**
+- [x] **Step 3: Verify diff and second review**
 
 Run `git diff --check`, inspect the complete diff, then submit only the diff and test summary to `agy` using the approved external-review flow. Do not treat an empty `agy --print` response as a pass.
 
-- [ ] **Step 4: Commit implementation**
+- [x] **Step 4: Commit implementation**
 
 ```powershell
 git add app.py templates/stock_detail.html tests/test_prediction_pipeline.py tests/test_line_flow.py tests/test_web_product.py README.md docs/superpowers/specs/2026-06-27-news-sentiment-phase-1-design.md docs/superpowers/plans/2026-06-27-news-sentiment-phase-1.md
