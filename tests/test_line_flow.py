@@ -627,6 +627,7 @@ class MessageFlowTests(unittest.TestCase):
         self.assertIn("廣達 (2382)：AI伺服器，AI 勝率 71%", prompt)
         self.assertIn("台積電 (2330)：半導體，AI 勝率 64%", prompt)
         self.assertIn("最多提出 2 到 3 檔", prompt)
+        self.assertIn("可分成 2 到 3 段", prompt)
 
     def test_papi_prompt_falls_back_when_sector_match_has_no_data(self):
         with patch.object(stock_app, "industry_map", {"AI伺服器": ["2382"]}), \
