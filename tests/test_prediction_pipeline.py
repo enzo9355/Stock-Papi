@@ -505,6 +505,48 @@ class PredictionPipelineTests(unittest.TestCase):
         self.assertEqual(deduped[0]["normalized_title"], "台積電營收創新高")
         self.assertEqual(deduped[0]["duplicate_count"], 1)
 
+    def test_score_news_item_handles_negation_and_weights(self):
+        positive = stock_app.score_news_item({
+            "title": "法人看好營收創新高",
+            "source": "財經報",
+            "age_hours": 2,
+            "parse_flags": {},
+        })
+        negated = stock_app.score_news_item({
+            "title": "法人不看好後市",
+            "source": None,
+            "age_hours": None,
+            "parse_flags": {},
+        })
+
+        self.assertGreater(positive["raw_score"], 0)
+        self.assertLessEqual(negated["raw_score"], 0)
+        self.assertEqual(positive["event_type"], "major")
+        self.assertIn("不看好", negated["matched_negations"])
+        self.assertGreater(positive["final_weight"], negated["final_weight"])
+
+    def test_aggregate_news_sentiment_returns_five_levels_and_confidence(self):
+        result = stock_app.aggregate_news_sentiment([
+            {
+                "raw_score": 1.0,
+                "final_weight": 1.0,
+                "direction": "positive",
+                "source": "財經報",
+                "age_hours": 1,
+            }
+            for _ in range(5)
+        ])
+        empty = stock_app.aggregate_news_sentiment([])
+
+        self.assertEqual(result["score"], 100)
+        self.assertEqual(result["status"], "極度偏多")
+        self.assertEqual(result["positive_ratio"], 1)
+        self.assertEqual(result["neutral_ratio"], 0)
+        self.assertEqual(result["confidence"], "高")
+        self.assertEqual(empty["score"], 50)
+        self.assertEqual(empty["status"], "中性")
+        self.assertEqual(empty["confidence"], "低")
+
     def test_web_and_line_messages_name_the_five_day_probability(self):
         data = sample_analysis_data()
 

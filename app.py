@@ -726,47 +726,138 @@ def get_ai_insight_for_broadcast(name, data, bt, news):
 # ==================================================
 # 4. 分析總控
 # ==================================================
-def analyze_sentiment_detail(news_list):
-    if not news_list:
+NEWS_NEGATIONS = ("不", "未", "無", "難")
+NEWS_MAJOR_EVENTS = ("財報", "營收", "財測", "法說", "政策", "違約", "訴訟", "併購")
+NEWS_OPINION_TERMS = ("傳聞", "預估", "預測", "看好", "看壞", "可能", "有望")
+NEWS_SENTIMENT_RULES = (
+    ("營收創新高", 1, 0.5), ("上修財測", 1, 0.5),
+    ("獲利創高", 1, 0.5), ("下修財測", -1, 0.5),
+    ("重大虧損", -1, 0.5), ("遭降評", -1, 0.5),
+    ("看好", 1, 0.2), ("成長", 1, 0.2), ("突破", 1, 0.2),
+    ("新高", 1, 0.2), ("獲利", 1, 0.2), ("買超", 1, 0.2),
+    ("看壞", -1, 0.2), ("下修", -1, 0.2), ("衰退", -1, 0.2),
+    ("虧損", -1, 0.2), ("違約", -1, 0.2), ("降評", -1, 0.2),
+    ("賣超", -1, 0.2),
+)
+
+
+def score_news_item(news):
+    item = dict(news)
+    title = str(item.get("normalized_title") or item.get("title") or "")
+    matched_phrases = []
+    matched_positive = []
+    matched_negative = []
+    matched_negations = []
+    raw_score = 0.0
+    for phrase, sign, value in NEWS_SENTIMENT_RULES:
+        if phrase not in title:
+            continue
+        negated = next(
+            (f"{negation}{phrase}" for negation in NEWS_NEGATIONS
+             if f"{negation}{phrase}" in title),
+            None,
+        )
+        raw_score += -sign * value if negated else sign * value
+        target = (
+            matched_phrases if value >= 0.5
+            else matched_positive if sign > 0
+            else matched_negative
+        )
+        target.append(phrase)
+        if negated:
+            matched_negations.append(negated)
+
+    raw_score = max(-1.0, min(1.0, raw_score))
+    event_type = (
+        "major" if any(term in title for term in NEWS_MAJOR_EVENTS)
+        else "opinion" if any(term in title for term in NEWS_OPINION_TERMS)
+        else "normal"
+    )
+    age_hours = item.get("age_hours")
+    time_weight = (
+        1.0 if age_hours is not None and age_hours <= 24
+        else 0.75 if age_hours is not None and age_hours <= 72
+        else 0.5 if age_hours is not None and age_hours <= 168
+        else 0.25
+    )
+    source_weight = 1.0 if item.get("source") else 0.75
+    event_weight = {"major": 1.3, "normal": 1.0, "opinion": 0.7}[event_type]
+    item.update({
+        "raw_score": raw_score,
+        "direction": (
+            "positive" if raw_score > 0.1
+            else "negative" if raw_score < -0.1
+            else "neutral"
+        ),
+        "matched_phrases": matched_phrases,
+        "matched_positive_terms": matched_positive,
+        "matched_negative_terms": matched_negative,
+        "matched_negations": matched_negations,
+        "event_type": event_type,
+        "time_weight": time_weight,
+        "source_weight": source_weight,
+        "event_weight": event_weight,
+        "final_weight": time_weight * source_weight * event_weight,
+    })
+    return item
+
+
+def aggregate_news_sentiment(items):
+    if not items:
         return {
             "score": 50.0,
             "status": "中性",
             "count": 0,
             "positive_ratio": 0.0,
             "negative_ratio": 0.0,
+            "neutral_ratio": 0.0,
+            "confidence_score": 0.0,
+            "confidence": "低",
+            "items": [],
         }
 
-    scores = []
-    positives = 0
-    negatives = 0
-    pos_words = ["漲", "紅", "高", "多", "買", "利多", "創紀錄", "看好", "強", "優", "雙位數", "營收增", "獲利", "新高", "上揚", "突破"]
-    neg_words = ["跌", "綠", "低", "空", "賣", "利空", "虧", "看壞", "弱", "劣", "崩", "違約", "衰退", "下修", "降評", "保守", "跳水"]
-    for n in news_list:
-        t = str(n.get('title', ''))
-        s = 0.5
-        pos_hits = sum(1 for w in pos_words if w in t)
-        neg_hits = sum(1 for w in neg_words if w in t)
-        if pos_hits:
-            positives += 1
-        if neg_hits:
-            negatives += 1
-        s += 0.15 * pos_hits
-        s -= 0.15 * neg_hits
-        scores.append(max(0, min(1, s)))
-    avg_s = sum(scores) / len(scores) * 100
-    if avg_s >= 65:
-        status = "🔥 樂觀貪婪"
-    elif avg_s <= 35:
-        status = "😨 悲觀恐慌"
-    else:
-        status = "⚖️ 中性觀望"
+    total_weight = sum(item["final_weight"] for item in items) or 1.0
+    weighted_score = sum(
+        item["raw_score"] * item["final_weight"] for item in items
+    ) / total_weight
+    score = max(0.0, min(100.0, 50.0 + 50.0 * weighted_score))
+    status = (
+        "極度偏多" if score >= 75
+        else "偏多" if score >= 60
+        else "中性" if score >= 40
+        else "偏空" if score >= 25
+        else "極度偏空"
+    )
+    count = len(items)
+    positive_ratio = sum(item["direction"] == "positive" for item in items) / count
+    negative_ratio = sum(item["direction"] == "negative" for item in items) / count
+    fresh_ratio = sum(
+        item.get("age_hours") is not None and item["age_hours"] <= 24
+        for item in items
+    ) / count
+    source_ratio = sum(bool(item.get("source")) for item in items) / count
+    confidence_score = 100 * (
+        0.5 * min(count / 5, 1) + 0.3 * fresh_ratio + 0.2 * source_ratio
+    )
     return {
-        "score": avg_s,
+        "score": score,
         "status": status,
-        "count": len(news_list),
-        "positive_ratio": positives / len(news_list),
-        "negative_ratio": negatives / len(news_list),
+        "count": count,
+        "positive_ratio": positive_ratio,
+        "negative_ratio": negative_ratio,
+        "neutral_ratio": max(0.0, 1 - positive_ratio - negative_ratio),
+        "confidence_score": confidence_score,
+        "confidence": (
+            "高" if confidence_score >= 75
+            else "中" if confidence_score >= 45
+            else "低"
+        ),
+        "items": items,
     }
+
+
+def analyze_sentiment_detail(news_list):
+    return aggregate_news_sentiment([score_news_item(item) for item in news_list])
 
 
 def analyze_sentiment(news_list):
