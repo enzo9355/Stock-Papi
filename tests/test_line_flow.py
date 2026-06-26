@@ -580,19 +580,61 @@ class MessageFlowTests(unittest.TestCase):
             "summary": "台積電短線偏多，但追價風險升高。",
             "detail_url": "https://alice.example/reports/2330",
         }
+        data = {
+            "code": "2330", "name": "台積電", "price": 100.0, "prob": 62,
+            "trend": "多頭", "rsi": 58.2, "macd_osc": 1.0, "k": 70, "d": 60,
+            "s_status": "偏多", "s_score": 68,
+            "foreign_flow": {"available": True, "status": "買超", "net_5": 1200},
+            "news": [], "bt": {"strat_cum": 8.0, "win_rate": 55, "sharpe": 1.1, "conclusion": "偏多"},
+        }
         with stock_app.app.test_request_context("/callback", base_url="https://example.com/"), \
              patch.object(stock_app, "line_store", None), \
              patch.object(stock_app, "line_bot_api", line_api), \
              patch.object(stock_app, "OPENALICE_API_URL", "https://alice.example/api/analyze", create=True), \
              patch.object(stock_app, "OPENALICE_API_TOKEN", "secret", create=True), \
+             patch.object(stock_app, "search_stock_code", return_value=("2330", "台積電")), \
+             patch.object(stock_app, "analyze", return_value=data), \
              patch.object(stock_app.requests, "post", return_value=response) as post:
             stock_app.handle_message(message_event("Papi 分析 2330"))
 
         post.assert_called_once()
-        self.assertEqual(post.call_args.kwargs["json"]["prompt"], "分析 2330")
+        openalice_prompt = post.call_args.kwargs["json"]["prompt"]
+        self.assertIn("你是 Papi", openalice_prompt)
+        self.assertIn("AI 勝率 62%", openalice_prompt)
+        self.assertIn("使用者問題：分析 2330", openalice_prompt)
         text = line_api.reply_message.call_args.args[1].text
         self.assertIn("台積電短線偏多", text)
         self.assertIn("https://alice.example/reports/2330", text)
+
+    def test_papi_prompt_uses_sector_snapshot_for_recommendation_examples(self):
+        snapshot = {
+            "as_of": "2026-06-24",
+            "sectors": {
+                "AI伺服器": [
+                    {"code": "2382", "name": "廣達", "prob": 71, "trend": "多頭", "score": 76.5, "foreign_net_5": 1800, "as_of": "2026-06-24"},
+                    {"code": "3231", "name": "緯創", "prob": 68, "trend": "多頭", "score": 72.1, "foreign_net_5": 900, "as_of": "2026-06-24"},
+                ],
+                "半導體": [
+                    {"code": "2330", "name": "台積電", "prob": 64, "trend": "多頭", "score": 69.0, "foreign_net_5": 1200, "as_of": "2026-06-24"},
+                ],
+            },
+        }
+        with patch.object(stock_app, "line_store", object()), \
+             patch.object(stock_app, "load_sector_signal_snapshot", return_value=snapshot):
+            prompt = stock_app._build_papi_prompt("最近有什麼股票可以觀察")
+
+        self.assertIn("每日產業預測可舉例標的", prompt)
+        self.assertIn("廣達 (2382)：AI伺服器，AI 勝率 71%", prompt)
+        self.assertIn("台積電 (2330)：半導體，AI 勝率 64%", prompt)
+        self.assertIn("最多提出 2 到 3 檔", prompt)
+
+    def test_papi_prompt_falls_back_when_sector_match_has_no_data(self):
+        with patch.object(stock_app, "industry_map", {"AI伺服器": ["2382"]}), \
+             patch.object(stock_app, "_gather_sector_data", return_value=[]), \
+             patch.object(stock_app, "line_store", None):
+            prompt = stock_app._build_papi_prompt("AI伺服器怎麼看")
+
+        self.assertIn("使用者問題：AI伺服器怎麼看", prompt)
 
     def test_papi_command_requires_configuration(self):
         line_api = Mock()

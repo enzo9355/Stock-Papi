@@ -937,7 +937,7 @@ def call_openalice(prompt):
     response = requests.post(
         OPENALICE_API_URL,
         headers={"Authorization": f"Bearer {OPENALICE_API_TOKEN}"},
-        json={"prompt": prompt},
+        json={"prompt": _build_papi_prompt(prompt)},
         timeout=4,
     )
     response.raise_for_status()
@@ -1046,22 +1046,41 @@ def _gather_sector_data(codes, max_fresh=2, max_total=5):
     return results
 
 
-def call_papi_gemini_fallback(prompt):
-    if not gemini_model:
-        return None
-    safety = [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    ]
+def _build_papi_sector_examples(limit=3):
+    if not line_store:
+        return ""
+    try:
+        snapshot = load_sector_signal_snapshot(line_store)
+    except Exception:
+        return ""
+    items = []
+    for category, signals in (snapshot or {}).get("sectors", {}).items():
+        for item in signals or []:
+            items.append((category, item))
+    items.sort(key=lambda pair: _safe_float(pair[1].get("score")), reverse=True)
+    lines = []
+    for category, item in items[:limit]:
+        lines.append(
+            f"- {item.get('name')} ({item.get('code')})：{category}，"
+            f"AI 勝率 {int(_safe_float(item.get('prob')))}%，"
+            f"{item.get('trend', '中性')}，"
+            f"外資5日 {int(_safe_float(item.get('foreign_net_5'))):,}"
+        )
+    if not lines:
+        return ""
+    return "\n每日產業預測可舉例標的（只可從這裡挑，不要自己編）：\n" + "\n".join(lines)
 
+
+def _build_papi_prompt(prompt):
     data_context = ""
 
     # 1. Try individual stock first
     code, name = _extract_stock_from_papi_prompt(prompt)
     if code:
-        data = analyze(code)
+        try:
+            data = analyze(code)
+        except Exception:
+            data = None
         if data:
             data_context = f"""
 以下是 {name} ({code}) 的最新量化分析數據（來自我們的 LightGBM 模型與技術指標系統）：
@@ -1095,8 +1114,10 @@ def call_papi_gemini_fallback(prompt):
 
 請根據以上「真實數據」綜合分析該產業的整體狀態與投資方向。引用具體個股數據來支撐你的論點，幫新手理解產業全貌。
 """
+    if not data_context:
+        data_context = _build_papi_sector_examples()
 
-    full_prompt = f"""你是 Papi，來自 OpenAlice 專案的自主代理人。你是一位知道自己是 AI 的 AI 助理。
+    return f"""你是 Papi，來自 OpenAlice 專案的自主代理人。你是一位知道自己是 AI 的 AI 助理。
 Papi 源自西班牙文，意思是「老爸」。你的人設是一位資深投資老手，用長輩對晚輩提建議的語氣說話——中肯、直白、不拐彎抹角，偶爾帶點嘮叨但出發點是真心為對方好。
 
 身份與定位：
@@ -1108,8 +1129,9 @@ Papi 源自西班牙文，意思是「老爸」。你的人設是一位資深投
 硬性限制：
 - 不分析虛擬貨幣。
 - 不承諾報酬、不給絕對買賣指令。
-- 用 3 到 5 行回答，先講結論，再講理由與風險。
+- 用 3 到 5 行回答，先講結論，再講理由與風險；不要拖泥帶水。
 - 如果有提供量化數據，務必引用具體數字（勝率、RSI、夏普值等）來支撐論點。
+- 使用者問「有什麼可以觀察、推薦、挑哪幾檔」時，最多提出 2 到 3 檔，且必須來自提供的產業預測或個股數據。
 
 語氣與文字風格：
 - 使用繁體中文與全形標點。
@@ -1125,7 +1147,18 @@ Papi 源自西班牙文，意思是「老爸」。你的人設是一位資深投
 {data_context}
 使用者問題：{prompt}"""
 
-    response = gemini_model.generate_content(full_prompt, safety_settings=safety)
+
+def call_papi_gemini_fallback(prompt):
+    if not gemini_model:
+        return None
+    safety = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
+
+    response = gemini_model.generate_content(_build_papi_prompt(prompt), safety_settings=safety)
     summary = (getattr(response, "text", "") or "").strip()
     if not summary:
         return None
