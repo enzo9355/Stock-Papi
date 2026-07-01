@@ -48,6 +48,7 @@ BROADCAST_TOKEN = os.getenv("BROADCAST_TOKEN")
 ALERT_TASK_TOKEN = os.getenv("ALERT_TASK_TOKEN")
 OPENALICE_API_URL = os.getenv("OPENALICE_API_URL")
 OPENALICE_API_TOKEN = os.getenv("OPENALICE_API_TOKEN")
+MARKETAUX_API_TOKEN = os.getenv("MARKETAUX_API_TOKEN")
 LINE_STATE_READ_BUDGET_SECONDS = 0.25
 LINE_STATE_READ_MAX_WORKERS = 4
 _line_state_read_slots = threading.BoundedSemaphore(LINE_STATE_READ_MAX_WORKERS)
@@ -484,6 +485,82 @@ def parse_news_items(xml, now=None):
     return items
 
 
+def parse_marketaux_items(payload, now=None):
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    now = (
+        now.replace(tzinfo=datetime.timezone.utc)
+        if now.tzinfo is None
+        else now.astimezone(datetime.timezone.utc)
+    )
+    items = []
+    for article in payload.get("data", [])[:20]:
+        title = str(article.get("title") or "").strip()
+        if not title:
+            continue
+        source = str(article.get("source") or "").strip() or None
+        published_at = age_hours = None
+        published_text = str(article.get("published_at") or "").strip()
+        if published_text:
+            try:
+                published = datetime.datetime.fromisoformat(
+                    published_text.replace("Z", "+00:00")
+                )
+                published = (
+                    published.replace(tzinfo=datetime.timezone.utc)
+                    if published.tzinfo is None
+                    else published.astimezone(datetime.timezone.utc)
+                )
+                published_at = published.isoformat()
+                age_hours = max(0.0, (now - published).total_seconds() / 3600)
+            except (TypeError, ValueError, OverflowError):
+                pass
+        external_scores = []
+        for entity in article.get("entities") or []:
+            try:
+                external_scores.append(float(entity["sentiment_score"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        items.append({
+            "title": title,
+            "normalized_title": title,
+            "link": str(article.get("url") or "").strip(),
+            "source": source,
+            "published_at": published_at,
+            "age_hours": age_hours,
+            "parse_flags": {
+                "missing_source": source is None,
+                "missing_published_at": published_at is None,
+            },
+            "duplicate_count": 0,
+            "provider": "marketaux",
+            "external_sentiment_score": (
+                sum(external_scores) / len(external_scores)
+                if external_scores else None
+            ),
+        })
+    return items
+
+
+def fetch_marketaux_news(name):
+    if not MARKETAUX_API_TOKEN:
+        return []
+    try:
+        response = requests.get(
+            "https://api.marketaux.com/v1/news/all",
+            params={
+                "api_token": MARKETAUX_API_TOKEN,
+                "search": name,
+                "language": "zh",
+                "limit": 3,
+            },
+            timeout=5,
+        )
+        response.raise_for_status()
+        return parse_marketaux_items(response.json())
+    except (requests.RequestException, AttributeError, TypeError, ValueError):
+        return []
+
+
 def normalize_and_dedupe(items):
     kept = []
     by_title = {}
@@ -508,10 +585,13 @@ def normalize_and_dedupe(items):
 
 
 def get_news(name):
+    items = []
     try:
-        return normalize_and_dedupe(parse_news_items(fetch_news_rss(name)))[:5]
+        items.extend(parse_news_items(fetch_news_rss(name)))
     except Exception:
-        return []
+        pass
+    items.extend(fetch_marketaux_news(name))
+    return normalize_and_dedupe(items)[:5]
 
 def calc_all(df):
     df = df.copy()

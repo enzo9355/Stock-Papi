@@ -514,6 +514,69 @@ class PredictionPipelineTests(unittest.TestCase):
         self.assertEqual(deduped[0]["normalized_title"], "台積電營收創新高")
         self.assertEqual(deduped[0]["duplicate_count"], 1)
 
+    def test_marketaux_news_is_optional_and_preserves_external_sentiment(self):
+        previous = getattr(stock_app, "MARKETAUX_API_TOKEN", None)
+        self.addCleanup(setattr, stock_app, "MARKETAUX_API_TOKEN", previous)
+        stock_app.MARKETAUX_API_TOKEN = None
+
+        with patch.object(stock_app.requests, "get") as get:
+            self.assertEqual(stock_app.fetch_marketaux_news("台積電"), [])
+        get.assert_not_called()
+
+        stock_app.MARKETAUX_API_TOKEN = "test-token"
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"data": [{
+            "title": "台積電營收創新高",
+            "url": "https://example.com/marketaux",
+            "source": "測試財經報",
+            "published_at": "2026-06-30T00:00:00.000000Z",
+            "entities": [{"sentiment_score": 0.72}],
+        }]}
+        with patch.object(stock_app.requests, "get", return_value=response) as get:
+            items = stock_app.fetch_marketaux_news("台積電")
+
+        self.assertEqual(items[0]["source"], "測試財經報")
+        self.assertEqual(items[0]["external_sentiment_score"], 0.72)
+        self.assertEqual(items[0]["provider"], "marketaux")
+        self.assertEqual(get.call_args.kwargs["timeout"], 5)
+        self.assertNotIn("test-token", str(items))
+
+    def test_marketaux_news_malformed_response_fails_closed(self):
+        previous = getattr(stock_app, "MARKETAUX_API_TOKEN", None)
+        self.addCleanup(setattr, stock_app, "MARKETAUX_API_TOKEN", previous)
+        stock_app.MARKETAUX_API_TOKEN = "test-token"
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = []
+
+        with patch.object(stock_app.requests, "get", return_value=response):
+            self.assertEqual(stock_app.fetch_marketaux_news("台積電"), [])
+
+    def test_get_news_merges_and_deduplicates_optional_marketaux_items(self):
+        xml = """<rss><channel><item>
+          <title>台積電營收創新高 - 財經報</title>
+          <link>https://example.com/google</link><source>財經報</source>
+        </item></channel></rss>"""
+        marketaux_item = {
+            "title": "台積電營收創新高",
+            "normalized_title": "台積電營收創新高",
+            "link": "https://example.com/marketaux",
+            "source": "MarketAux",
+            "published_at": None,
+            "age_hours": None,
+            "parse_flags": {"missing_source": False, "missing_published_at": True},
+            "duplicate_count": 0,
+            "provider": "marketaux",
+        }
+
+        with patch.object(stock_app, "fetch_news_rss", return_value=xml), \
+             patch.object(stock_app, "fetch_marketaux_news", return_value=[marketaux_item]):
+            items = stock_app.get_news("台積電")
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["duplicate_count"], 1)
+
     def test_score_news_item_handles_negation_and_weights(self):
         positive = stock_app.score_news_item({
             "title": "法人看好營收創新高",

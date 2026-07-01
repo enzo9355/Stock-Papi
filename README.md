@@ -98,6 +98,7 @@ Flask / Gunicorn on Cloud Run
 | --- | --- |
 | `FINMIND_USER` | FinMind 帳號，用於取得 token |
 | `FINMIND_PASSWORD` | FinMind 密碼 |
+| `MARKETAUX_API_TOKEN` | 選用的 MarketAux 金鑰；啟用第二新聞來源與外部情緒交叉驗證 |
 | `GCP_PROJECT_ID` | 啟用 Firestore 關注與提醒功能 |
 | `ALERT_TASK_TOKEN` | Cloud Scheduler 呼叫 `/tasks/check-alerts` 的 Bearer token |
 | `BROADCAST_TOKEN` | 週報廣播端點驗證 token |
@@ -204,6 +205,6 @@ gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 app:app
 
 - 預測與回測不代表未來績效。
 - 新聞情緒是輔助資訊，不會直接覆蓋模型機率。
-- 新聞情緒依標題詞組、否定詞、事件類型、發布時間與來源完整度加權；目前僅使用 Google News RSS，不含社群貼文。
+- 新聞情緒依標題詞組、否定詞、事件類型、發布時間與來源完整度加權；預設使用 Google News RSS，設定 `MARKETAUX_API_TOKEN` 後會合併 MarketAux 結構化新聞並去重。外部情緒僅供交叉驗證，不會直接修改模型機率。
 - FinMind 或 Yahoo 資料缺漏時，部分籌碼或價格資訊可能暫時不可用。
 - Cloud Run scale-to-zero 會有冷啟動；新增功能時應避免模組載入階段做重運算或網路請求。
