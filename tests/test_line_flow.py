@@ -712,6 +712,62 @@ class MessageFlowTests(unittest.TestCase):
         self.assertIn("最多提出 2 到 3 檔", prompt)
         self.assertIn("可分成 2 到 3 段", prompt)
 
+    def test_papi_prompt_extracts_stock_code_from_natural_sentence(self):
+        data = {
+            "code": "2330", "name": "台積電", "price": 100.0, "prob": 62,
+            "trend": "多頭", "rsi": 58.2, "macd_osc": 1.0, "k": 70, "d": 60,
+            "s_status": "偏多", "s_score": 68, "foreign_flow": {"available": False},
+            "news": [], "bt": {"strat_cum": 8.0, "win_rate": 55, "sharpe": 1.1, "conclusion": "偏多"},
+        }
+
+        with patch.object(stock_app, "analyze", return_value=data) as analyze:
+            prompt = stock_app._build_papi_prompt("你認為2330會反彈嗎")
+
+        analyze.assert_called_once_with("2330")
+        self.assertIn("以下是 台積電 (2330) 的最新量化分析數據", prompt)
+
+    def test_papi_prompt_does_not_treat_investment_amount_as_stock_code(self):
+        self.assertEqual(
+            stock_app._extract_stock_from_papi_prompt("我有10000元該怎麼投資"),
+            (None, None),
+        )
+
+    def test_papi_prompt_maps_market_question_to_taiex(self):
+        data = {
+            "code": "TAIEX", "name": "台股大盤", "price": 23000.0, "prob": 54,
+            "trend": "空頭", "rsi": 45.0, "macd_osc": -1.0, "k": 35, "d": 42,
+            "s_status": "中性", "s_score": 50, "foreign_flow": {"available": False},
+            "news": [], "bt": {"strat_cum": 2.0, "win_rate": 51, "sharpe": 0.5, "conclusion": "震盪"},
+        }
+
+        with patch.object(stock_app, "analyze", return_value=data) as analyze:
+            prompt = stock_app._build_papi_prompt("你認為台股會繼續下修嗎")
+
+        analyze.assert_called_once_with("TAIEX")
+        self.assertIn("以下是 台股大盤 (TAIEX) 的最新量化分析數據", prompt)
+
+    def test_papi_prompt_forbids_invented_missing_data_reasons(self):
+        with patch.object(stock_app, "line_store", None):
+            prompt = stock_app._build_papi_prompt("最近市場怎麼看")
+
+        self.assertIn("不得宣稱資料庫未收錄", prompt)
+        self.assertIn("不得捏造系統或模型故障原因", prompt)
+
+    def test_papi_stock_data_failure_does_not_fall_back_to_unrelated_examples(self):
+        snapshot = {
+            "sectors": {"半導體製造": [{
+                "code": "2330", "name": "台積電", "prob": 60,
+                "trend": "多頭", "score": 60, "foreign_net_5": 0,
+            }]},
+        }
+        with patch.object(stock_app, "analyze", return_value=None), \
+             patch.object(stock_app, "line_store", object()), \
+             patch.object(stock_app, "load_sector_signal_snapshot", return_value=snapshot):
+            prompt = stock_app._build_papi_prompt("你認為2330會反彈嗎")
+
+        self.assertIn("已辨識台積電 (2330)", prompt)
+        self.assertNotIn("每日產業預測可舉例標的", prompt)
+
     def test_papi_prompt_falls_back_when_sector_match_has_no_data(self):
         with patch.object(stock_app, "industry_map", {"AI伺服器": ["2382"]}), \
              patch.object(stock_app, "_gather_sector_data", return_value=[]), \
