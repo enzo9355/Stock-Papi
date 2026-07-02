@@ -28,6 +28,11 @@
   - 針對使用者自己的關注清單排序
   - 依五日上漲機率挑出目前較強的標的
 
+- 全市場產業預測
+  - 每日從證交所與櫃買中心整批行情涵蓋上市、上櫃股票
+  - 先依成交金額與成交量挑出活躍候選，再執行完整模型與回測
+  - LINE 顯示排序後前 10 檔，避免 1GB Cloud Run 對全市場逐檔重算
+
 - 投資試算
   - 股票卡內可點「投資試算」
   - 預設金額：1 萬、5 萬、10 萬
@@ -49,7 +54,7 @@ LINE Messaging API
   │
   ▼
 Flask / Gunicorn on Cloud Run
-  ├─ 股票資料：FinMind、twstock、yfinance
+  ├─ 股票資料：FinMind、twstock、yfinance、TWSE／TPEx OpenAPI
   ├─ 新聞資料：Google News RSS
   ├─ 量化模型：LightGBM + scikit-learn
   ├─ 狀態儲存：Firestore REST API

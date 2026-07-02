@@ -181,6 +181,42 @@ def scheduler_quote(code="2330", name="台積電", **changes):
 
 
 class LineBuilderTests(unittest.TestCase):
+    def test_fetch_market_activity_normalizes_twse_and_tpex_quotes(self):
+        twse = Mock()
+        twse.raise_for_status.return_value = None
+        twse.json.return_value = [{
+            "Code": "2330", "TradeValue": "12,345", "TradeVolume": "678",
+        }]
+        tpex = Mock()
+        tpex.raise_for_status.return_value = None
+        tpex.json.return_value = [{
+            "SecuritiesCompanyCode": "6488",
+            "TransactionAmount": "9,876",
+            "TradingShares": "543",
+        }]
+
+        with patch.object(stock_app.requests, "get", side_effect=[twse, tpex]) as get:
+            activity = stock_app.fetch_market_activity()
+
+        self.assertEqual(activity["2330"], {"trade_value": 12345.0, "trade_volume": 678.0})
+        self.assertEqual(activity["6488"], {"trade_value": 9876.0, "trade_volume": 543.0})
+        self.assertEqual(get.call_count, 2)
+        self.assertTrue(all(call.kwargs["timeout"] == 5 for call in get.call_args_list))
+
+    def test_sector_candidates_rank_the_full_universe_by_market_activity(self):
+        codes = [f"{1000 + index}" for index in range(80)]
+        activity = {
+            "1079": {"trade_value": 1_000_000, "trade_volume": 10_000},
+            "1065": {"trade_value": 500_000, "trade_volume": 20_000},
+            "1001": {"trade_value": 100, "trade_volume": 100},
+        }
+
+        result = stock_app.sector_candidates(
+            "全市場", codes, limit=2, activity=activity,
+        )
+
+        self.assertEqual(result, ["1079", "1065"])
+
     def test_build_market_map_adds_papi_theme_sectors_before_raw_groups(self):
         fake_codes = {
             "2382": SimpleNamespace(name="廣達", group="電腦及週邊設備業"),
@@ -258,6 +294,20 @@ class LineBuilderTests(unittest.TestCase):
             [item["code"] for item in snapshot["sectors"]["測試產業"]],
             ["1220", "1221", "1222", "1223", "1224"],
         )
+
+    def test_refresh_sector_signals_fetches_market_activity_once(self):
+        activity = {"2330": {"trade_value": 1000, "trade_volume": 100}}
+        snapshot = {"as_of": "2026-07-02", "sectors": {}}
+
+        with patch.object(stock_app, "fetch_market_activity", return_value=activity) as fetch, \
+             patch.object(stock_app, "build_sector_signal_snapshot", return_value=snapshot) as build, \
+             patch.object(stock_app, "save_sector_signal_snapshot") as save:
+            result = stock_app.refresh_sector_signals(object())
+
+        fetch.assert_called_once_with()
+        build.assert_called_once_with(stock_app.industry_map, stock_app.analyze, activity=activity)
+        save.assert_called_once()
+        self.assertIs(result, snapshot)
 
     def test_stock_flex_has_three_postbacks_and_one_analysis_uri(self):
         card = stock_app.build_stock_flex_message(

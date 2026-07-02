@@ -1529,7 +1529,41 @@ def sector_signal_score(data):
     return round(prob + strat_bonus + foreign_bonus - drawdown_penalty, 2)
 
 
-def sector_candidates(category, codes, limit=SECTOR_SCAN_LIMIT):
+def fetch_market_activity():
+    sources = (
+        (
+            "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
+            "Code", "TradeValue", "TradeVolume",
+        ),
+        (
+            "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
+            "SecuritiesCompanyCode", "TransactionAmount", "TradingShares",
+        ),
+    )
+    activity = {}
+    for url, code_field, value_field, volume_field in sources:
+        try:
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            rows = response.json()
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                code = str(row.get(code_field) or "").strip()
+                if not code:
+                    continue
+                activity[code] = {
+                    "trade_value": _safe_float(str(row.get(value_field) or "0").replace(",", "")),
+                    "trade_volume": _safe_float(str(row.get(volume_field) or "0").replace(",", "")),
+                }
+        except (requests.RequestException, AttributeError, TypeError, ValueError):
+            continue
+    return activity
+
+
+def sector_candidates(category, codes, limit=SECTOR_SCAN_LIMIT, activity=None):
     selected = []
     seen = set()
     for code in codes:
@@ -1540,9 +1574,15 @@ def sector_candidates(category, codes, limit=SECTOR_SCAN_LIMIT):
             continue
         selected.append(code)
         seen.add(code)
-        if len(selected) == limit:
-            break
-    return selected
+    if activity:
+        selected.sort(
+            key=lambda code: (
+                _safe_float((activity.get(code) or {}).get("trade_value")),
+                _safe_float((activity.get(code) or {}).get("trade_volume")),
+            ),
+            reverse=True,
+        )
+    return selected[:limit]
 
 
 def sector_signal_item(code, data):
@@ -1564,14 +1604,14 @@ def sector_signal_item(code, data):
     }
 
 
-def build_sector_signal_snapshot(market_map, analyze_fn, now=None):
+def build_sector_signal_snapshot(market_map, analyze_fn, now=None, activity=None):
     now = now or datetime.datetime.utcnow()
     sectors = {}
     dates = []
     scan_limit = max(SECTOR_SCAN_LIMIT, SECTOR_DISPLAY_LIMIT * 6)
     for category, codes in market_map.items():
         items = []
-        for code in sector_candidates(category, codes, limit=scan_limit):
+        for code in sector_candidates(category, codes, limit=scan_limit, activity=activity):
             try:
                 item = sector_signal_item(code, analyze_fn(code))
             except Exception:
@@ -2250,7 +2290,8 @@ def load_sector_signal_snapshot(store):
 
 
 def refresh_sector_signals(store):
-    snapshot = build_sector_signal_snapshot(industry_map, analyze)
+    activity = fetch_market_activity()
+    snapshot = build_sector_signal_snapshot(industry_map, analyze, activity=activity)
     save_sector_signal_snapshot(store, snapshot)
     return snapshot
 
