@@ -14,3 +14,6 @@ pip-delete-this-directory.txt
 .vscode/
 .idea/
 *.sqlite3
+.local-quant/
+local-quant-data/
+*.checkpoint.tmp

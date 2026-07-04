@@ -2,3 +2,6 @@
 .deps/
 __pycache__/
 *.py[cod]
+.local-quant/
+local-quant-data/
+*.checkpoint.tmp
