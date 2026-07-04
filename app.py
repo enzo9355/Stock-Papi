@@ -9,6 +9,8 @@ import threading
 import time
 import datetime
 import hmac
+import math
+from concurrent.futures import ThreadPoolExecutor
 from email.utils import parsedate_to_datetime
 from html import escape
 import requests
@@ -49,6 +51,7 @@ ALERT_TASK_TOKEN = os.getenv("ALERT_TASK_TOKEN")
 OPENALICE_API_URL = os.getenv("OPENALICE_API_URL")
 OPENALICE_API_TOKEN = os.getenv("OPENALICE_API_TOKEN")
 MARKETAUX_API_TOKEN = os.getenv("MARKETAUX_API_TOKEN")
+SENTIMENT_WINDOW_DAYS = 30
 LINE_STATE_READ_BUDGET_SECONDS = 0.25
 LINE_STATE_READ_MAX_WORKERS = 4
 _line_state_read_slots = threading.BoundedSemaphore(LINE_STATE_READ_MAX_WORKERS)
@@ -579,6 +582,78 @@ def fetch_marketaux_news(name):
         return []
 
 
+def parse_stocktwits_sentiment(payload, code, now=None):
+    if not isinstance(payload, dict):
+        return []
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    now = (
+        now.replace(tzinfo=datetime.timezone.utc)
+        if now.tzinfo is None
+        else now.astimezone(datetime.timezone.utc)
+    )
+    cutoff = now - datetime.timedelta(days=SENTIMENT_WINDOW_DAYS)
+    bullish = bearish = 0
+    newest = None
+    for message in payload.get("messages") or []:
+        if not isinstance(message, dict):
+            continue
+        try:
+            published = datetime.datetime.fromisoformat(
+                str(message.get("created_at") or "").replace("Z", "+00:00")
+            )
+            published = (
+                published.replace(tzinfo=datetime.timezone.utc)
+                if published.tzinfo is None
+                else published.astimezone(datetime.timezone.utc)
+            )
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if published < cutoff or published > now:
+            continue
+        sentiment = (((message.get("entities") or {}).get("sentiment") or {}).get("basic"))
+        if sentiment == "Bullish":
+            bullish += 1
+        elif sentiment == "Bearish":
+            bearish += 1
+        else:
+            continue
+        newest = max(newest, published) if newest else published
+
+    sample_size = bullish + bearish
+    if not sample_size:
+        return []
+    title = f"{code} StockTwits 近 30 日多方 {bullish}、空方 {bearish}"
+    return [{
+        "title": title,
+        "normalized_title": title,
+        "link": f"https://stocktwits.com/symbol/{code}",
+        "source": "StockTwits",
+        "published_at": newest.isoformat(),
+        "age_hours": max(0.0, (now - newest).total_seconds() / 3600),
+        "parse_flags": {"missing_source": False, "missing_published_at": False},
+        "duplicate_count": 0,
+        "provider": "stocktwits",
+        "external_sentiment_score": (bullish - bearish) / sample_size,
+        "social_sample_size": sample_size,
+    }]
+
+
+def fetch_stocktwits_sentiment(code):
+    if not is_us_ticker(code):
+        return []
+    try:
+        response = requests.get(
+            "https://api.stocktwits.com/api/2/streams/symbol/"
+            f"{urllib.parse.quote(str(code).upper())}.json",
+            headers={"User-Agent": "Stock-Papi/1.0 sentiment"},
+            timeout=3,
+        )
+        response.raise_for_status()
+        return parse_stocktwits_sentiment(response.json(), str(code).upper())
+    except (requests.RequestException, AttributeError, TypeError, ValueError):
+        return []
+
+
 def normalize_and_dedupe(items):
     kept = []
     by_title = {}
@@ -602,14 +677,34 @@ def normalize_and_dedupe(items):
     return kept
 
 
-def get_news(name):
+def get_news(name, code=None):
     items = []
-    try:
-        items.extend(parse_news_items(fetch_news_rss(name)))
-    except Exception:
-        pass
-    items.extend(fetch_marketaux_news(name))
-    return normalize_and_dedupe(items)[:5]
+    social = []
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        rss_future = executor.submit(fetch_news_rss, name)
+        marketaux_future = executor.submit(fetch_marketaux_news, name)
+        social_future = (
+            executor.submit(fetch_stocktwits_sentiment, code) if code else None
+        )
+        try:
+            items.extend(parse_news_items(rss_future.result()))
+        except Exception:
+            pass
+        try:
+            items.extend(marketaux_future.result())
+        except Exception:
+            pass
+        if social_future:
+            try:
+                social = social_future.result()
+            except Exception:
+                pass
+    news = [
+        item for item in normalize_and_dedupe(items)
+        if item.get("age_hours") is None
+        or item["age_hours"] <= SENTIMENT_WINDOW_DAYS * 24
+    ]
+    return news[:4 if social else 5] + social[:1]
 
 def calc_all(df):
     df = df.copy()
@@ -842,6 +937,7 @@ NEWS_SENTIMENT_RULES = (
 def score_news_item(news):
     item = dict(news)
     title = str(item.get("normalized_title") or item.get("title") or "")
+    is_social = item.get("provider") == "stocktwits"
     matched_phrases = []
     matched_positive = []
     matched_negative = []
@@ -865,9 +961,16 @@ def score_news_item(news):
         if negated:
             matched_negations.append(negated)
 
+    if is_social:
+        try:
+            external_score = float(item.get("external_sentiment_score") or 0.0)
+        except (TypeError, ValueError):
+            external_score = 0.0
+        raw_score = max(-1.0, min(1.0, external_score)) * 0.6
     raw_score = max(-1.0, min(1.0, raw_score))
     event_type = (
-        "major" if any(term in title for term in NEWS_MAJOR_EVENTS)
+        "opinion" if is_social
+        else "major" if any(term in title for term in NEWS_MAJOR_EVENTS)
         else "opinion" if any(term in title for term in NEWS_OPINION_TERMS)
         else "normal"
     )
@@ -878,8 +981,12 @@ def score_news_item(news):
         else 0.5 if age_hours is not None and age_hours <= 168
         else 0.25
     )
-    source_weight = 1.0 if item.get("source") else 0.75
+    source_weight = 0.6 if is_social else 1.0 if item.get("source") else 0.75
     event_weight = {"major": 1.3, "normal": 1.0, "opinion": 0.7}[event_type]
+    engagement_weight = (
+        min(1.0, 0.7 + math.log1p(max(0, int(item.get("social_sample_size") or 0))) / 12)
+        if is_social else 1.0
+    )
     item.update({
         "raw_score": raw_score,
         "direction": (
@@ -895,7 +1002,8 @@ def score_news_item(news):
         "time_weight": time_weight,
         "source_weight": source_weight,
         "event_weight": event_weight,
-        "final_weight": time_weight * source_weight * event_weight,
+        "engagement_weight": engagement_weight,
+        "final_weight": time_weight * source_weight * event_weight * engagement_weight,
     })
     return item
 
@@ -911,6 +1019,9 @@ def aggregate_news_sentiment(items):
             "neutral_ratio": 0.0,
             "confidence_score": 0.0,
             "confidence": "低",
+            "source_count": 0,
+            "social_sample_size": 0,
+            "window_days": SENTIMENT_WINDOW_DAYS,
             "items": [],
         }
 
@@ -934,6 +1045,10 @@ def aggregate_news_sentiment(items):
         for item in items
     ) / count
     source_ratio = sum(bool(item.get("source")) for item in items) / count
+    source_count = len({item.get("provider") or "news" for item in items})
+    social_sample_size = sum(
+        max(0, int(item.get("social_sample_size") or 0)) for item in items
+    )
     confidence_score = 100 * (
         0.5 * min(count / 5, 1) + 0.3 * fresh_ratio + 0.2 * source_ratio
     )
@@ -950,6 +1065,9 @@ def aggregate_news_sentiment(items):
             else "中" if confidence_score >= 45
             else "低"
         ),
+        "source_count": source_count,
+        "social_sample_size": social_sample_size,
+        "window_days": SENTIMENT_WINDOW_DAYS,
         "items": items,
     }
 
@@ -971,7 +1089,7 @@ def _do_analyze(code):
     
     last = df.iloc[-1]
     name = get_stock_name(code)
-    news = get_news(name)
+    news = get_news(name, code)
 
     sentiment = analyze_sentiment_detail(news)
     news = sentiment["items"]
@@ -1015,6 +1133,9 @@ def _do_analyze(code):
         "news_neutral_ratio": sentiment["neutral_ratio"],
         "news_confidence_score": sentiment["confidence_score"],
         "news_confidence": sentiment["confidence"],
+        "news_source_count": sentiment["source_count"],
+        "social_sample_size": sentiment["social_sample_size"],
+        "sentiment_window_days": sentiment["window_days"],
         "candles": json.dumps(tv_df[['Date','Open','High_corr','Low_corr','Close']].rename(columns={'Date':'time','Open':'open','High_corr':'high','Low_corr':'low','Close':'close'}).to_dict('records')),
         "ma20_line": json.dumps(tv_df[['Date','MA20']].dropna().rename(columns={'Date':'time','MA20':'value'}).to_dict('records')),
         "prob_h": json.dumps(tv_df[['Date','AI_P']].dropna().rename(columns={'Date':'time','AI_P':'value'}).to_dict('records')),
@@ -1102,6 +1223,22 @@ def market_forecast(): return analyze("TAIEX")
 # ==================================================
 # 5. UI 渲染
 # ==================================================
+def _format_sentiment_summary(data):
+    parts = [f'{data.get("news_count", len(data.get("news", [])))} 則']
+    source_count = int(data.get("news_source_count") or 0)
+    social_sample_size = int(data.get("social_sample_size") or 0)
+    if source_count:
+        parts.append(f"{source_count} 個來源")
+    if social_sample_size:
+        parts.append(f"社群 {social_sample_size} 則")
+    parts.extend([
+        f'正面 {round(data.get("news_positive_ratio", 0) * 100)}%',
+        f'負面 {round(data.get("news_negative_ratio", 0) * 100)}%',
+        f'可信度{data.get("news_confidence", "低")}',
+    ])
+    return "｜".join(parts)
+
+
 def render_web(d):
     bt = d['bt']
     news_blocks = []
@@ -1116,13 +1253,8 @@ def render_web(d):
             f'🔹 {escape(str(title))}<small style="display:block;color:#94a3b8;margin-top:4px;">'
             f'{escape(str(source))} · {escape(published)} · {direction}</small></a>'
         )
-    news_html = "".join(news_blocks) if news_blocks else "暫無相關新聞"
-    sentiment_summary = (
-        f'{d.get("news_count", len(d["news"]))} 則｜'
-        f'正面 {round(d.get("news_positive_ratio", 0) * 100)}%｜'
-        f'負面 {round(d.get("news_negative_ratio", 0) * 100)}%｜'
-        f'可信度{d.get("news_confidence", "低")}'
-    )
+    news_html = "".join(news_blocks) if news_blocks else "暫無相關新聞或輿論"
+    sentiment_summary = _format_sentiment_summary(d)
     
     html = f"""
 <!DOCTYPE html>
@@ -1199,9 +1331,9 @@ def render_web(d):
 </div>
 
 <div class="card small">
-    <h2>📰 相關即時新聞與情緒分析</h2>
+    <h2>📰 相關即時新聞與輿論分析</h2>
     <div style="margin-bottom: 15px; background: rgba(255,255,255,0.05); padding: 15px; border-radius: 12px; border-left: 4px solid {'#ef5350' if d['s_score']<40 else '#26a69a'};">
-        <span style="color: #aaa; font-size: 14px;">市場情緒分數</span><br>
+        <span style="color: #aaa; font-size: 14px;">新聞／輿論情緒</span><br>
         <span style="font-size: 24px; font-weight: bold; color: {'#ef5350' if d['s_score']<40 else '#26a69a'};">{d['s_score']:.1f} ({d['s_status']})</span><br>
         <span style="color:#94a3b8;font-size:13px;">{sentiment_summary}</span>
     </div>
@@ -1791,12 +1923,7 @@ def build_stock_flex_message(code, name, data, url, watched=False):
     color_prob = "#10b981" if data['prob'] >= 50 else "#ef4444"
     color_s = "#10b981" if data['s_score'] >= 50 else "#ef4444"
     color_trend = "#10b981" if "多" in data['trend'] else "#ef4444"
-    sentiment_summary = (
-        f"{data.get('news_count', len(data.get('news', [])))} 則｜"
-        f"正面 {round(data.get('news_positive_ratio', 0) * 100)}%｜"
-        f"負面 {round(data.get('news_negative_ratio', 0) * 100)}%｜"
-        f"可信度{data.get('news_confidence', '低')}"
-    )
+    sentiment_summary = _format_sentiment_summary(data)
 
     return {
         "type": "bubble",
@@ -1843,7 +1970,7 @@ def build_stock_flex_message(code, name, data, url, watched=False):
                     "type": "box",
                     "layout": "horizontal",
                     "contents": [
-                        { "type": "text", "text": "🌡 新聞情緒", "color": "#64748b", "size": "sm", "flex": 4 },
+                        { "type": "text", "text": "🌡 新聞／輿論情緒", "color": "#64748b", "size": "sm", "flex": 4, "wrap": True },
                         { "type": "text", "text": f"{data['s_status']} ({data['s_score']:.1f})", "color": color_s, "size": "md", "weight": "bold", "align": "end", "flex": 5 }
                     ]
                 },

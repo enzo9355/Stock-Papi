@@ -1,6 +1,6 @@
 # AI Quant Investment LINE Bot
 
-一個面向股票新手的台股量化分析 LINE Bot。它把技術指標、模型機率、新聞情緒、法人籌碼與回測結果整理成容易理解的 LINE 卡片與 Web 分析頁，讓使用者可以先在 LINE 快速操作，再到 Web 查看完整圖表與細節。
+一個面向股票新手的台股與美股量化分析 LINE Bot。它把技術指標、模型機率、新聞／輿論情緒、法人籌碼與回測結果整理成容易理解的 LINE 卡片與 Web 分析頁，讓使用者可以先在 LINE 快速操作，再到 Web 查看完整圖表與細節。
 
 > 本專案提供的資訊僅供研究與學習參考，不構成投資建議；投資決策與盈虧需由使用者自行承擔。
 
@@ -8,8 +8,8 @@
 
 - LINE 股票查詢
   - 輸入台股代碼、名稱或標準美股代碼，例如 `2330`、`台積電`、`AAPL`、`NVDA`
-  - 回覆最新收盤價、五日上漲機率、趨勢、新聞情緒與操作按鈕
-  - 新聞情緒採 0～100 分與五級標籤，並顯示正負比例及資料可信度
+  - 回覆最新收盤價、五日上漲機率、趨勢、新聞／輿論情緒與操作按鈕
+  - 情緒採 0～100 分與五級標籤，並顯示正負比例、來源數及資料可信度
 
 - 六格 Rich Menu
   - 看大盤
@@ -55,7 +55,7 @@ LINE Messaging API
   ▼
 Flask / Gunicorn on Cloud Run
   ├─ 股票資料：FinMind、twstock、yfinance、TWSE／TPEx OpenAPI
-  ├─ 新聞資料：Google News RSS
+  ├─ 輿論資料：Google News RSS、選用 MarketAux、美股 StockTwits
   ├─ 量化模型：LightGBM + scikit-learn
   ├─ 狀態儲存：Firestore REST API
   ├─ 定時提醒：Cloud Scheduler → /tasks/check-alerts
@@ -72,7 +72,7 @@ Flask / Gunicorn on Cloud Run
 ## Web 與 LINE 分工
 
 - LINE：加入關注、提醒管理、產業預測入口
-- Web：完整圖表、新聞情緒、回測與白話解讀
+- Web：完整圖表、新聞／輿論情緒、回測與白話解讀
 
 ## 核心檔案
 
@@ -209,8 +209,10 @@ gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 app:app
 ## 目前限制
 
 - 預測與回測不代表未來績效。
-- 新聞情緒是輔助資訊，不會直接覆蓋模型機率。
-- 新聞情緒依標題詞組、否定詞、事件類型、發布時間與來源完整度加權；預設使用 Google News RSS，設定 `MARKETAUX_API_TOKEN` 後會合併 MarketAux 結構化新聞並去重。外部情緒僅供交叉驗證，不會直接修改模型機率。
+- 新聞／輿論情緒是輔助資訊，不會直接覆蓋模型機率。
+- 情緒資料限制在可判定日期的近 30 日，依標題詞組、否定詞、事件類型、時間與來源完整度加權；預設使用 Google News RSS，設定 `MARKETAUX_API_TOKEN` 後會合併 MarketAux 結構化新聞並去重。
+- 經驗證的美股代碼會額外讀取 StockTwits 公開 symbol stream，只保存匿名 Bullish／Bearish 彙總。這是自陳的散戶情緒，來源權重低於新聞，端點失敗時安全略過。
+- 近 30 日、多來源、互動量與來源品質的設計參考 [mvanhorn/last30days-skill](https://github.com/mvanhorn/last30days-skill)；未將完整 agent 引擎或其額外依賴放進 Cloud Run。
 - FinMind 或 Yahoo 資料缺漏時，部分籌碼或價格資訊可能暫時不可用。
 - 美股目前支援 1 至 5 個英文字母的個股或 ETF 代碼直接查詢；尚未提供全美股每日掃描，且外資、融資融券欄位會顯示資料不足。
 - Cloud Run scale-to-zero 會有冷啟動；新增功能時應避免模組載入階段做重運算或網路請求。

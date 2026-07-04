@@ -496,7 +496,7 @@ class PredictionPipelineTests(unittest.TestCase):
                 "source": "財經報",
                 "published_at": "2026-06-27T00:00:00+00:00",
                 "age_hours": 1,
-            }]),
+            }]) as get_news,
             patch.object(stock_app, "analyze_sentiment", return_value=(80, "樂觀")),
         ):
             result = stock_app._do_analyze("2330")
@@ -506,6 +506,7 @@ class PredictionPipelineTests(unittest.TestCase):
         self.assertIn("news_neutral_ratio", result)
         self.assertIn("news_confidence", result)
         self.assertEqual(result["news"][0]["direction"], "positive")
+        get_news.assert_called_once_with("台積電", "2330")
 
     def test_analyze_sentiment_returns_breakdown_without_model_side_effects(self):
         news = [
@@ -585,6 +586,55 @@ class PredictionPipelineTests(unittest.TestCase):
         with patch.object(stock_app.requests, "get", return_value=response):
             self.assertEqual(stock_app.fetch_marketaux_news("台積電"), [])
 
+    def test_parse_stocktwits_sentiment_builds_anonymous_30_day_summary(self):
+        now = datetime.datetime(2026, 7, 4, tzinfo=datetime.timezone.utc)
+        payload = {"messages": [
+            {
+                "created_at": "2026-07-03T00:00:00Z",
+                "entities": {"sentiment": {"basic": "Bullish"}},
+                "user": {"username": "should-not-leak"},
+                "body": "full post should not be retained",
+            },
+            {
+                "created_at": "2026-07-02T00:00:00Z",
+                "entities": {"sentiment": {"basic": "Bearish"}},
+            },
+            {
+                "created_at": "2026-05-01T00:00:00Z",
+                "entities": {"sentiment": {"basic": "Bullish"}},
+            },
+            {
+                "created_at": "2026-07-01T00:00:00Z",
+                "entities": {"sentiment": None},
+            },
+        ]}
+
+        items = stock_app.parse_stocktwits_sentiment(payload, "AAPL", now=now)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["social_sample_size"], 2)
+        self.assertEqual(items[0]["external_sentiment_score"], 0)
+        self.assertEqual(items[0]["provider"], "stocktwits")
+        self.assertNotIn("author", items[0])
+        self.assertNotIn("body", items[0])
+
+    def test_stocktwits_fetch_skips_non_us_ticker(self):
+        with patch.object(stock_app.requests, "get") as get:
+            result = stock_app.fetch_stocktwits_sentiment("2330")
+
+        self.assertEqual(result, [])
+        get.assert_not_called()
+
+    def test_stocktwits_fetch_fails_closed_on_request_error(self):
+        with patch.object(
+            stock_app.requests,
+            "get",
+            side_effect=stock_app.requests.RequestException("offline"),
+        ):
+            result = stock_app.fetch_stocktwits_sentiment("AAPL")
+
+        self.assertEqual(result, [])
+
     def test_get_news_merges_and_deduplicates_optional_marketaux_items(self):
         xml = """<rss><channel><item>
           <title>台積電營收創新高 - 財經報</title>
@@ -609,6 +659,42 @@ class PredictionPipelineTests(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["duplicate_count"], 1)
 
+    def test_get_news_keeps_one_social_summary_and_filters_old_news(self):
+        xml = """<rss><channel>
+          <item><title>新消息一</title><link>https://example.com/1</link><source>財經報</source><pubDate>Fri, 03 Jul 2026 00:00:00 GMT</pubDate></item>
+          <item><title>新消息二</title><link>https://example.com/2</link><source>財經報</source><pubDate>Thu, 02 Jul 2026 00:00:00 GMT</pubDate></item>
+          <item><title>新消息三</title><link>https://example.com/3</link><source>財經報</source><pubDate>Wed, 01 Jul 2026 00:00:00 GMT</pubDate></item>
+          <item><title>新消息四</title><link>https://example.com/4</link><source>財經報</source><pubDate>Tue, 30 Jun 2026 00:00:00 GMT</pubDate></item>
+          <item><title>新消息五</title><link>https://example.com/5</link><source>財經報</source><pubDate>Mon, 29 Jun 2026 00:00:00 GMT</pubDate></item>
+          <item><title>過期消息</title><link>https://example.com/old</link><source>財經報</source><pubDate>Fri, 01 May 2026 00:00:00 GMT</pubDate></item>
+        </channel></rss>"""
+        social = {
+            "title": "AAPL StockTwits 近 30 日多方 8、空方 2",
+            "normalized_title": "AAPL StockTwits 近 30 日多方 8、空方 2",
+            "link": "https://stocktwits.com/symbol/AAPL",
+            "source": "StockTwits",
+            "published_at": "2026-07-03T00:00:00+00:00",
+            "age_hours": 24,
+            "parse_flags": {"missing_source": False, "missing_published_at": False},
+            "duplicate_count": 0,
+            "provider": "stocktwits",
+            "external_sentiment_score": 0.6,
+            "social_sample_size": 10,
+        }
+
+        with patch.object(stock_app, "fetch_news_rss", return_value=xml), \
+             patch.object(stock_app, "fetch_marketaux_news", return_value=[]), \
+             patch.object(stock_app, "fetch_stocktwits_sentiment", return_value=[social]), \
+             patch.object(stock_app.datetime, "datetime", wraps=datetime.datetime) as dt:
+            dt.now.return_value = datetime.datetime(
+                2026, 7, 4, tzinfo=datetime.timezone.utc
+            )
+            items = stock_app.get_news("美股 AAPL", "AAPL")
+
+        self.assertEqual(len(items), 5)
+        self.assertEqual(sum(item.get("provider") == "stocktwits" for item in items), 1)
+        self.assertNotIn("過期消息", [item["normalized_title"] for item in items])
+
     def test_score_news_item_handles_negation_and_weights(self):
         positive = stock_app.score_news_item({
             "title": "法人看好營收創新高",
@@ -628,6 +714,45 @@ class PredictionPipelineTests(unittest.TestCase):
         self.assertEqual(positive["event_type"], "major")
         self.assertIn("不看好", negated["matched_negations"])
         self.assertGreater(positive["final_weight"], negated["final_weight"])
+
+    def test_stocktwits_direction_is_dampened_and_weight_capped(self):
+        scored = stock_app.score_news_item({
+            "title": "AAPL StockTwits 近 30 日多方 8、空方 2",
+            "provider": "stocktwits",
+            "source": "StockTwits",
+            "external_sentiment_score": 0.6,
+            "social_sample_size": 10,
+            "age_hours": 1,
+            "parse_flags": {},
+        })
+
+        self.assertAlmostEqual(scored["raw_score"], 0.36)
+        self.assertEqual(scored["event_type"], "opinion")
+        self.assertLess(scored["source_weight"], 1)
+        self.assertLessEqual(scored["engagement_weight"], 1)
+        self.assertGreaterEqual(scored["engagement_weight"], 0.7)
+
+    def test_aggregate_reports_source_and_social_coverage(self):
+        result = stock_app.analyze_sentiment_detail([
+            {
+                "title": "營收創新高",
+                "source": "財經報",
+                "provider": "news",
+                "age_hours": 1,
+            },
+            {
+                "title": "AAPL StockTwits 近 30 日多方 8、空方 2",
+                "source": "StockTwits",
+                "provider": "stocktwits",
+                "external_sentiment_score": 0.6,
+                "social_sample_size": 10,
+                "age_hours": 1,
+            },
+        ])
+
+        self.assertEqual(result["source_count"], 2)
+        self.assertEqual(result["social_sample_size"], 10)
+        self.assertEqual(result["window_days"], 30)
 
     def test_aggregate_news_sentiment_returns_five_levels_and_confidence(self):
         result = stock_app.aggregate_news_sentiment([
@@ -685,16 +810,30 @@ class PredictionPipelineTests(unittest.TestCase):
             "news_neutral_ratio": 0.25,
             "news_confidence": "中",
             "news_confidence_score": 64.0,
+            "news_source_count": 2,
+            "social_sample_size": 10,
+            "sentiment_window_days": 30,
+            "projection": {"ok": False},
+            "foreign_flow": {
+                "status": "資料不足",
+                "available": False,
+                "source": "無資料",
+                "net_5": 0,
+                "net_20": 0,
+            },
         })
 
-        with stock_app.app.app_context():
+        with stock_app.app.test_request_context("/stock/2330"):
             html = stock_app.render_web(data)
+            template_html = stock_app.render_template("stock_detail.html", d=data)
         flex = stock_app.build_stock_flex_message(
             "2330", "台積電", data, "https://example.com"
         )
-        rendered = html + json.dumps(flex, ensure_ascii=False)
+        rendered = html + template_html + json.dumps(flex, ensure_ascii=False)
 
-        self.assertIn("12 則｜正面 58%｜負面 17%｜可信度中", rendered)
+        self.assertIn("新聞／輿論情緒", rendered)
+        self.assertIn("12 則｜2 個來源｜社群 10 則", rendered)
+        self.assertIn("近期新聞與輿論", template_html)
         self.assertIn("財經報", html)
         self.assertIn("2026-06-27", html)
         self.assertIn("正向", html)
