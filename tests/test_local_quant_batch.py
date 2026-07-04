@@ -114,6 +114,38 @@ class LocalQuantBatchTests(unittest.TestCase):
             self.assertEqual(calls, ["2330", "2317"])
             self.assertEqual(second["next_index"], 2)
 
+            third = run_market_batch(
+                root,
+                "TW",
+                ["2330", "2317"],
+                lambda symbol: calls.append(symbol) or {"as_of": "2026-07-04"},
+                limit=1,
+                now_fn=lambda: datetime.datetime(2026, 7, 7, 6, tzinfo=TAIPEI),
+                delay=0,
+            )
+            self.assertEqual(calls, ["2330", "2317", "2330"])
+            self.assertEqual(third["next_index"], 1)
+
+    def test_market_batch_does_not_advance_checkpoint_when_disk_write_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ensure_layout(root)
+
+            with (
+                patch("local_quant._write_gzip_json_atomic", side_effect=OSError("disk full")),
+                self.assertRaises(OSError),
+            ):
+                run_market_batch(
+                    root,
+                    "TW",
+                    ["2330"],
+                    lambda _symbol: {"as_of": "2026-07-03"},
+                    now_fn=lambda: datetime.datetime(2026, 7, 5, 6, tzinfo=TAIPEI),
+                    delay=0,
+                )
+
+            self.assertEqual(load_checkpoint(root), {})
+
     def test_taiwan_snapshot_reuses_existing_pipeline_and_keeps_daily_records(self):
         calls = []
         frame = pd.DataFrame(

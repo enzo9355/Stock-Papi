@@ -146,6 +146,45 @@ class LocalQuantTests(unittest.TestCase):
 
             self.assertEqual(result, 2)
 
+    def test_cli_run_loads_pipeline_only_inside_work_window(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ensure_layout(root)
+            pipeline = type(
+                "Pipeline",
+                (),
+                {"industry_map": {"全市場": ["2330", "2317", "../bad", "2330"]}},
+            )()
+            with (
+                patch("local_quant.validate_data_root", return_value=root),
+                patch("local_quant.load_stock_pipeline", return_value=pipeline) as loader,
+                patch("local_quant.run_market_batch", return_value={"attempted": 2}) as batch,
+            ):
+                result = main(
+                    [
+                        "--root", str(root), "--run", "--market", "TW",
+                        "--limit", "2", "--delay", "0",
+                    ],
+                    now=at(6, 0),
+                    free_bytes=200 * 1024**3,
+                )
+
+            self.assertEqual(result, 0)
+            loader.assert_called_once_with(root)
+            self.assertEqual(batch.call_args.args[2], ["2317", "2330"])
+
+            with (
+                patch("local_quant.validate_data_root", return_value=root),
+                patch("local_quant.load_stock_pipeline") as closed_loader,
+            ):
+                result = main(
+                    ["--root", str(root), "--run", "--market", "TW"],
+                    now=at(22, 0),
+                    free_bytes=200 * 1024**3,
+                )
+            self.assertEqual(result, 0)
+            closed_loader.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

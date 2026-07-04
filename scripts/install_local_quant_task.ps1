@@ -8,12 +8,14 @@ param(
 $ErrorActionPreference = 'Stop'
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $Runner = Join-Path $RepoRoot 'local_quant.py'
+$Wrapper = Join-Path $PSScriptRoot 'run_local_quant_task.ps1'
 $BundledPython = Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
 $PythonCommand = Get-Command python -ErrorAction SilentlyContinue
 $PythonExe = if (Test-Path $BundledPython) { $BundledPython } elseif ($PythonCommand) { $PythonCommand.Source } else { $null }
 
 if (-not $PythonExe) { throw 'Python executable was not found' }
 if (-not (Test-Path $Runner)) { throw "Runner not found: $Runner" }
+if (-not (Test-Path $Wrapper)) { throw "Wrapper not found: $Wrapper" }
 if ($DataRoot -ne 'D:\StockPapiData') { throw 'Data root must be D:\StockPapiData' }
 
 $Drive = [System.IO.DriveInfo]::new('D')
@@ -69,9 +71,10 @@ if (-not $AclIsPrivate) {
     Set-Acl -LiteralPath $DataRoot -AclObject $Acl
 }
 
-$ActionArguments = '"' + $Runner + '" --root "' + $DataRoot + '" --dry-run'
+$PowerShellExe = (Get-Process -Id $PID).Path
+$ActionArguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $Wrapper + '"'
 $Action = New-ScheduledTaskAction `
-    -Execute $PythonExe `
+    -Execute $PowerShellExe `
     -Argument $ActionArguments `
     -WorkingDirectory $RepoRoot
 $TriggerAt = [datetime]::ParseExact($TriggerTime, 'HH:mm', $null)

@@ -199,37 +199,46 @@ def run_market_batch(
     if market != "TW" or limit < 1 or delay < 0:
         raise ValueError("invalid market batch settings")
     checkpoint = load_checkpoint(root)
+    checked_at = now_fn()
     start = (
         checkpoint.get("next_index", 0)
         if checkpoint.get("stage") == "market_batch"
         and checkpoint.get("market") == market
         else 0
     )
+    if (
+        start >= len(symbols)
+        and checkpoint.get("cycle_completed_on") != checked_at.date().isoformat()
+    ):
+        start = 0
     next_index = start
     attempted = completed = 0
     failures = []
     for index in range(start, min(len(symbols), start + limit)):
-        checked_at = now_fn()
+        if index != start:
+            checked_at = now_fn()
         if window_phase(checked_at) != "run":
             break
         symbol = str(symbols[index])
         attempted += 1
         try:
-            write_stock_artifact(root, market, symbol, analyze_symbol(symbol))
-            completed += 1
+            payload = analyze_symbol(symbol)
         except Exception as exc:
             failures.append({"symbol": symbol, "error": type(exc).__name__})
+        else:
+            write_stock_artifact(root, market, symbol, payload)
+            completed += 1
         next_index = index + 1
-        save_checkpoint(
-            root,
-            {
-                "stage": "market_batch",
-                "market": market,
-                "next_index": next_index,
-                "failed": failures,
-                "updated_at": checked_at.isoformat(),
-            },
-        )
+        state = {
+            "stage": "market_batch",
+            "market": market,
+            "next_index": next_index,
+            "failed": failures,
+            "updated_at": checked_at.isoformat(),
+        }
+        if next_index >= len(symbols):
+            state["cycle_completed_on"] = checked_at.date().isoformat()
+        save_checkpoint(root, state)
         if delay:
             sleep_fn(delay)
     return {
@@ -257,6 +266,16 @@ def load_stock_pipeline(root):
         return importlib.import_module("app")
     finally:
         os.environ.update(removed)
+
+
+def get_taiwan_symbols(pipeline):
+    return sorted(
+        {
+            str(symbol)
+            for symbol in pipeline.industry_map.get("全市場", [])
+            if re.fullmatch(r"[0-9]{4,6}", str(symbol))
+        }
+    )
 
 
 def build_taiwan_stock_snapshot(pipeline, symbol):
@@ -314,6 +333,10 @@ def main(argv=None, now=None, free_bytes=None):
     parser.add_argument("--root", default=r"D:\StockPapiData")
     parser.add_argument("--init", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--run", action="store_true")
+    parser.add_argument("--market", choices=("TW",), default="TW")
+    parser.add_argument("--limit", type=int, default=200)
+    parser.add_argument("--delay", type=float, default=0.5)
     parser.add_argument("--min-free-gb", type=float, default=100.0)
     args = parser.parse_args(argv)
 
@@ -331,19 +354,41 @@ def main(argv=None, now=None, free_bytes=None):
             {
                 "checked_at": checked_at.isoformat(),
                 "dry_run": bool(args.dry_run),
+                "run": bool(args.run),
                 "free_gb": round(available / 1024**3, 1),
                 "phase": phase,
                 "root": str(root),
             },
         )
-        if not args.dry_run:
-            raise RuntimeError("phase one only supports --dry-run")
-        if phase == "run":
+        if args.dry_run and args.run:
+            raise ValueError("choose either --dry-run or --run")
+        if not args.dry_run and not args.run:
+            raise ValueError("choose --dry-run or --run")
+        if args.dry_run and phase == "run":
             with acquire_lock(root, now=checked_at):
                 save_checkpoint(
                     root,
                     {"stage": "ready", "checked_at": checked_at.isoformat()},
                 )
+        elif args.run and phase == "run":
+            with acquire_lock(root, now=checked_at):
+                pipeline = load_stock_pipeline(root)
+                symbols = get_taiwan_symbols(pipeline)
+                now_fn = (
+                    (lambda: checked_at)
+                    if now is not None
+                    else (lambda: datetime.datetime.now(TAIPEI))
+                )
+                summary = run_market_batch(
+                    root,
+                    args.market,
+                    symbols,
+                    lambda symbol: build_taiwan_stock_snapshot(pipeline, symbol),
+                    limit=args.limit,
+                    now_fn=now_fn,
+                    delay=args.delay,
+                )
+                print(json.dumps(summary, ensure_ascii=False, separators=(",", ":")))
         print(f"local quant phase={phase} free_gb={available / 1024**3:.1f}")
         return 0
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
