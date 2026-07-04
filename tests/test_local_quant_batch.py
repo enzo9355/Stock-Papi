@@ -2,12 +2,20 @@ import gzip
 import datetime
 import json
 import math
+import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pandas as pd
+import local_quant
 
 from local_quant import (
     TAIPEI,
+    build_taiwan_stock_snapshot,
     ensure_layout,
     load_checkpoint,
     run_market_batch,
@@ -105,6 +113,90 @@ class LocalQuantBatchTests(unittest.TestCase):
             )
             self.assertEqual(calls, ["2330", "2317"])
             self.assertEqual(second["next_index"], 2)
+
+    def test_taiwan_snapshot_reuses_existing_pipeline_and_keeps_daily_records(self):
+        calls = []
+        frame = pd.DataFrame(
+            {
+                "Close": [100.0, 101.0],
+                "Volume": [1000, 1200],
+            },
+            index=pd.to_datetime(["2026-07-02", "2026-07-03"]),
+        )
+        frame.index.name = "Date"
+
+        def get_data(symbol, days):
+            calls.append((symbol, days))
+            return frame.copy()
+
+        def calc_all(data):
+            data["RSI"] = [50.0, 55.0]
+            return data
+
+        def run_ai_engine(data):
+            data["AI_P"] = [58.0, 61.2]
+            return {"accuracy": 57.5, "trades": 12}
+
+        pipeline = SimpleNamespace(
+            get_data=get_data,
+            calc_all=calc_all,
+            run_ai_engine=run_ai_engine,
+            get_stock_name=lambda _symbol: "台積電",
+            PREDICTION_HORIZON=5,
+        )
+
+        payload = build_taiwan_stock_snapshot(pipeline, "2330")
+
+        self.assertEqual(calls, [("2330", 730)])
+        self.assertEqual(payload["as_of"], "2026-07-03")
+        self.assertEqual(payload["rows"], 2)
+        self.assertEqual(payload["latest"]["AI_P"], 61.2)
+        self.assertEqual(payload["backtest"]["trades"], 12)
+        self.assertEqual(payload["model_version"], "lgbm-5d-v1")
+        self.assertEqual(len(payload["daily"]), 2)
+        self.assertEqual(payload["daily"][-1]["Date"], "2026-07-03T00:00:00.000")
+
+    def test_taiwan_snapshot_rejects_missing_history_or_backtest(self):
+        empty = SimpleNamespace(
+            get_data=lambda _symbol, _days: pd.DataFrame(),
+            calc_all=lambda data: data,
+            run_ai_engine=lambda _data: None,
+            get_stock_name=lambda symbol: symbol,
+            PREDICTION_HORIZON=5,
+        )
+        with self.assertRaises(ValueError):
+            build_taiwan_stock_snapshot(empty, "2330")
+
+    def test_pipeline_loader_keeps_cloud_secrets_out_of_local_app_import(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cache_paths = []
+            fake_yfinance = SimpleNamespace(
+                set_tz_cache_location=lambda path: cache_paths.append(path)
+            )
+            pipeline = object()
+
+            def import_app(name):
+                self.assertEqual(name, "app")
+                self.assertNotIn("GEMINI_API_KEY", os.environ)
+                self.assertNotIn("GCP_PROJECT_ID", os.environ)
+                return pipeline
+
+            environment = {
+                "GEMINI_API_KEY": "must-not-reach-local-app",
+                "GCP_PROJECT_ID": "must-not-reach-local-app",
+            }
+            with (
+                patch.dict(os.environ, environment, clear=False),
+                patch.dict(sys.modules, {"yfinance": fake_yfinance}),
+                patch.object(local_quant.importlib, "import_module", side_effect=import_app),
+            ):
+                result = local_quant.load_stock_pipeline(root)
+                self.assertEqual(os.environ["GEMINI_API_KEY"], environment["GEMINI_API_KEY"])
+                self.assertEqual(os.environ["GCP_PROJECT_ID"], environment["GCP_PROJECT_ID"])
+
+            self.assertIs(result, pipeline)
+            self.assertEqual(cache_paths, [str(root / "cache" / "yfinance")])
 
 
 if __name__ == "__main__":

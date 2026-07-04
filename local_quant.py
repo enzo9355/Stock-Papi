@@ -1,6 +1,7 @@
 import argparse
 import datetime
 import gzip
+import importlib
 import json
 import math
 import os
@@ -236,6 +237,62 @@ def run_market_batch(
         "completed": completed,
         "failed": failures,
         "next_index": next_index,
+    }
+
+
+def load_stock_pipeline(root):
+    cache = Path(root) / "cache" / "yfinance"
+    cache.mkdir(parents=True, exist_ok=True)
+    import yfinance as yf
+
+    yf.set_tz_cache_location(str(cache))
+    os.environ.setdefault("LINE_CHANNEL_ACCESS_TOKEN", "local-only")
+    os.environ.setdefault("LINE_CHANNEL_SECRET", "local-only")
+    removed = {
+        key: os.environ.pop(key)
+        for key in ("GEMINI_API_KEY", "GCP_PROJECT_ID")
+        if key in os.environ
+    }
+    try:
+        return importlib.import_module("app")
+    finally:
+        os.environ.update(removed)
+
+
+def build_taiwan_stock_snapshot(pipeline, symbol):
+    symbol = str(symbol)
+    if not re.fullmatch(r"[0-9]{4,6}", symbol):
+        raise ValueError("invalid Taiwan symbol")
+    frame = pipeline.get_data(symbol, 730)
+    if frame is None or frame.empty:
+        raise ValueError("price history is unavailable")
+    frame = pipeline.calc_all(frame)
+    if frame is None or frame.empty:
+        raise ValueError("calculated history is unavailable")
+    backtest = pipeline.run_ai_engine(frame)
+    if not isinstance(backtest, dict):
+        raise ValueError("backtest is unavailable")
+
+    daily = json.loads(
+        frame.reset_index().to_json(
+            orient="records",
+            date_format="iso",
+            date_unit="ms",
+        )
+    )
+    latest = daily[-1]
+    as_of = str(latest.get("Date", "")).split("T", 1)[0]
+    if not as_of:
+        raise ValueError("latest market date is unavailable")
+    horizon = int(getattr(pipeline, "PREDICTION_HORIZON", 5))
+    return {
+        "as_of": as_of,
+        "name": pipeline.get_stock_name(symbol),
+        "rows": len(daily),
+        "model_version": f"lgbm-{horizon}d-v1",
+        "latest": latest,
+        "backtest": backtest,
+        "daily": daily,
     }
 
 
