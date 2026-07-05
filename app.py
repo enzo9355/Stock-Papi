@@ -69,6 +69,7 @@ else:
     gemini_model = None
 
 finmind_token = None
+_FINMIND_BLOCKED_UNTIL = 0
 CATEGORY_PAGE_SIZE = 12
 SECTOR_SCAN_LIMIT = 20
 SECTOR_DISPLAY_LIMIT = 10
@@ -124,6 +125,10 @@ def finmind_login():
         return
 
 def fetch_finmind_dataset(dataset, code, start_date, end_date):
+    global _FINMIND_BLOCKED_UNTIL
+    now = time.time()
+    if now < _FINMIND_BLOCKED_UNTIL:
+        return pd.DataFrame()
     finmind_login()
     params = {
         "dataset": dataset,
@@ -139,6 +144,8 @@ def fetch_finmind_dataset(dataset, code, start_date, end_date):
             params=params,
             timeout=8,
         )
+        if response.status_code in (402, 403):
+            _FINMIND_BLOCKED_UNTIL = now + (60 if response.status_code == 402 else 30) * 60
         response.raise_for_status()
         return pd.DataFrame(response.json().get("data", []))
     except (requests.RequestException, ValueError, TypeError) as exc:
@@ -507,7 +514,9 @@ def get_data(code, days=730):
 
     yf_price = pd.DataFrame()
     if code != "TAIEX":
-        yf_price = fetch_yfinance_price_history([f"{code}.TW", f"{code}.TWO"], start_date, end_date)
+        info = twstock.codes.get(code)
+        suffix = ".TWO" if getattr(info, "data_source", "") == "tpex" else ".TW"
+        yf_price = fetch_yfinance_price_history([f"{code}{suffix}"], start_date, end_date)
 
     raw = fetch_finmind_dataset(
         "TaiwanStockPrice", code, start_date, end_date
