@@ -202,10 +202,20 @@ def acquire_lock(root, now=None, stale_after=datetime.timedelta(hours=6)):
     return RunnerLock(lock_path, token)
 
 
-def save_checkpoint(root, state):
+def _checkpoint_path(root, market="TW"):
+    if market == "TW":
+        filename = "progress.json"
+    elif market == "US":
+        filename = "progress-US.json"
+    else:
+        raise ValueError("unsupported market")
+    return Path(root) / "checkpoints" / filename
+
+
+def save_checkpoint(root, state, market="TW"):
     if not isinstance(state, dict):
         raise TypeError("checkpoint must be a dictionary")
-    checkpoint = Path(root) / "checkpoints" / "progress.json"
+    checkpoint = _checkpoint_path(root, market)
     _write_json_atomic(checkpoint, state)
 
 
@@ -257,10 +267,22 @@ def _write_gzip_json_atomic(path, document):
     os.replace(temporary, path)
 
 
-def write_stock_artifact(root, market, symbol, payload):
+def validate_market_symbol(market, symbol):
     symbol = str(symbol)
-    if market != "TW" or not re.fullmatch(r"[0-9]{4,6}", symbol):
-        raise ValueError("invalid Taiwan symbol")
+    valid = (
+        market == "TW" and bool(re.fullmatch(r"[0-9]{4,6}", symbol))
+    ) or (
+        market == "US"
+        and len(symbol) <= 10
+        and bool(re.fullmatch(r"[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)?", symbol))
+    )
+    if not valid:
+        raise ValueError("invalid market symbol")
+    return symbol
+
+
+def write_stock_artifact(root, market, symbol, payload):
+    symbol = validate_market_symbol(market, symbol)
     if not isinstance(payload, dict):
         raise TypeError("stock artifact payload must be a dictionary")
     document = dict(payload)
@@ -281,9 +303,9 @@ def run_market_batch(
     delay=0.5,
     sleep_fn=time.sleep,
 ):
-    if market != "TW" or limit < 1 or delay < 0:
+    if market not in ("TW", "US") or limit < 1 or delay < 0:
         raise ValueError("invalid market batch settings")
-    checkpoint = load_checkpoint(root)
+    checkpoint = load_checkpoint(root, market=market)
     checked_at = now_fn()
     start = (
         checkpoint.get("next_index", 0)
@@ -323,7 +345,7 @@ def run_market_batch(
         }
         if next_index >= len(symbols):
             state["cycle_completed_on"] = checked_at.date().isoformat()
-        save_checkpoint(root, state)
+        save_checkpoint(root, state, market=market)
         if delay:
             sleep_fn(delay)
     return {
@@ -400,8 +422,8 @@ def build_taiwan_stock_snapshot(pipeline, symbol):
     }
 
 
-def load_checkpoint(root):
-    checkpoint = Path(root) / "checkpoints" / "progress.json"
+def load_checkpoint(root, market="TW"):
+    checkpoint = _checkpoint_path(root, market)
     if not checkpoint.exists():
         return {}
     try:

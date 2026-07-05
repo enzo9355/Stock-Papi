@@ -19,6 +19,7 @@ from local_quant import (
     ensure_layout,
     load_checkpoint,
     run_market_batch,
+    save_checkpoint,
     write_stock_artifact,
 )
 
@@ -52,6 +53,38 @@ class LocalQuantBatchTests(unittest.TestCase):
                     write_stock_artifact(root, "TW", symbol, {"value": 1.0})
             with self.assertRaises(ValueError):
                 write_stock_artifact(root, "TW", "2330", {"value": math.nan})
+
+    def test_us_stock_artifact_uses_separate_market_path_and_safe_symbol(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ensure_layout(root)
+
+            target = write_stock_artifact(
+                root, "US", "BRK-B", {"as_of": "2026-07-03"}
+            )
+
+            self.assertEqual(
+                target,
+                root / "artifacts" / "stocks" / "US" / "BRK-B.json.gz",
+            )
+            with gzip.open(target, "rt", encoding="utf-8") as stream:
+                self.assertEqual(json.load(stream)["market"], "US")
+            for symbol in ("../AAPL", "AAPL/evil", "AAPL.B", "AAPL\\evil"):
+                with self.subTest(symbol=symbol), self.assertRaises(ValueError):
+                    write_stock_artifact(root, "US", symbol, {"value": 1})
+
+    def test_taiwan_and_us_checkpoints_do_not_overwrite_each_other(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ensure_layout(root)
+
+            save_checkpoint(root, {"market": "TW", "next_index": 200}, market="TW")
+            save_checkpoint(root, {"market": "US", "next_index": 50}, market="US")
+
+            self.assertEqual(load_checkpoint(root, market="TW")["next_index"], 200)
+            self.assertEqual(load_checkpoint(root, market="US")["next_index"], 50)
+            self.assertTrue((root / "checkpoints" / "progress.json").exists())
+            self.assertTrue((root / "checkpoints" / "progress-US.json").exists())
 
     def test_market_batch_isolates_failure_and_saves_progress(self):
         with tempfile.TemporaryDirectory() as temporary:
