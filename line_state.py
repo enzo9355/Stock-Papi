@@ -231,10 +231,12 @@ class FirestoreStore:
 def _is_valid_code(code):
     return (
         isinstance(code, str)
+        and bool(code)
         and len(code) <= 10
+        and code.isascii()
         and bool(
             re.fullmatch(
-                r"(?:[0-9]{4,6}|[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)?)",
+                r"(?:[A-Za-z0-9]+|[A-Z][A-Z0-9]*-[A-Z0-9]+)",
                 code,
             )
         )
