@@ -474,10 +474,8 @@ def get_us_symbols(root, fetch_json=None, now=None):
     return symbols
 
 
-def build_taiwan_stock_snapshot(pipeline, symbol):
-    symbol = str(symbol)
-    if not re.fullmatch(r"[0-9]{4,6}", symbol):
-        raise ValueError("invalid Taiwan symbol")
+def build_stock_snapshot(pipeline, market, symbol):
+    symbol = validate_market_symbol(market, symbol)
     frame = pipeline.get_data(symbol, 730)
     if frame is None or frame.empty:
         raise ValueError("price history is unavailable")
@@ -580,7 +578,9 @@ def main(argv=None, now=None, free_bytes=None):
                     root,
                     args.market,
                     symbols,
-                    lambda symbol: build_taiwan_stock_snapshot(pipeline, symbol),
+                    lambda symbol: build_stock_snapshot(
+                        pipeline, args.market, symbol
+                    ),
                     limit=args.limit,
                     now_fn=now_fn,
                     delay=args.delay,

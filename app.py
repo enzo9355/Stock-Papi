@@ -201,7 +201,11 @@ def fetch_option_context_history(start_date, end_date=None):
 
 def is_us_ticker(value):
     value = str(value or "").upper()
-    return value != "TAIEX" and bool(re.fullmatch(r"[A-Z]{1,5}", value))
+    return (
+        value != "TAIEX"
+        and len(value) <= 10
+        and bool(re.fullmatch(r"[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)?", value))
+    )
 
 
 def get_stock_name(code):
@@ -2978,14 +2982,14 @@ def handle_postback(event):
         return
 
     payload = getattr(getattr(event, "postback", None), "data", "")
-    stock_match = re.fullmatch(r"(?:watch:(?:add|remove)|alert:menu|calc:menu|calc:custom):([A-Za-z0-9]+)", payload)
-    calc_amount_match = re.fullmatch(r"calc:amount:([A-Za-z0-9]+):([0-9]+(?:\.[0-9]+)?)", payload)
+    stock_match = re.fullmatch(r"(?:watch:(?:add|remove)|alert:menu|calc:menu|calc:custom):([A-Za-z0-9-]+)", payload)
+    calc_amount_match = re.fullmatch(r"calc:amount:([A-Za-z0-9-]+):([0-9]+(?:\.[0-9]+)?)", payload)
     alert_start_match = re.fullmatch(
-        r"alert:start:([A-Za-z0-9]+):(price|price_above|price_below|probability)",
+        r"alert:start:([A-Za-z0-9-]+):(price|price_above|price_below|probability)",
         payload,
     )
     alert_trend_match = re.fullmatch(
-        r"alert:trend:([A-Za-z0-9]+):(多頭|空頭)",
+        r"alert:trend:([A-Za-z0-9-]+):(多頭|空頭)",
         payload,
     )
     alert_remove_match = re.fullmatch(r"alert:remove:([0-9a-fA-F]{32})", payload)
@@ -3198,7 +3202,7 @@ def handle_message(event):
                 _reply_text(event, "Papi AI 摘要暫時失敗；你仍可直接輸入股票代號查看完整量化分析。")
         return
 
-    calc_text = re.fullmatch(r"試算\s+([A-Za-z0-9]+)\s+([0-9]+(?:\.[0-9]+)?)", msg)
+    calc_text = re.fullmatch(r"試算\s+([A-Za-z0-9-]+)\s+([0-9]+(?:\.[0-9]+)?)", msg)
     if calc_text:
         code, name = search_stock_code(calc_text.group(1))
         if not code:

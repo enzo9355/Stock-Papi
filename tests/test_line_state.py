@@ -442,8 +442,12 @@ class LineStateTests(unittest.TestCase):
             with self.subTest(code=code, name=name), self.assertRaises(StateError):
                 add_watch(empty_state(), code, name)
 
-    def test_stock_codes_must_use_ascii_letters_and_digits(self):
-        invalid_codes = ["台積電", "２３３０"]
+    def test_stock_codes_support_safe_us_class_suffixes(self):
+        state = empty_state()
+        add_watch(state, "BRK-B", "美股 BRK-B")
+        self.assertEqual(state["watchlist"][0]["code"], "BRK-B")
+
+        invalid_codes = ["台積電", "２３３０", "AAPL.B", "AAPL/evil", "A--B"]
         for code in invalid_codes:
             with self.subTest(operation="add_watch", code=code), self.assertRaises(StateError):
                 add_watch(empty_state(), code, "台積電")

@@ -52,8 +52,12 @@ class PredictionPipelineTests(unittest.TestCase):
     def test_search_stock_code_accepts_standard_us_tickers(self):
         self.assertEqual(stock_app.search_stock_code("aapl"), ("AAPL", "美股 AAPL"))
         self.assertEqual(stock_app._resolve_postback_stock("AAPL"), ("AAPL", "美股 AAPL"))
+        self.assertEqual(stock_app.search_stock_code("brk-b"), ("BRK-B", "美股 BRK-B"))
+        self.assertEqual(stock_app._resolve_postback_stock("BRK-B"), ("BRK-B", "美股 BRK-B"))
         self.assertFalse(stock_app.is_us_ticker("TAIEX"))
-        self.assertEqual(stock_app.search_stock_code("TOOLONG"), (None, None))
+        for invalid in ("TOOLONGTICK", "AAPL.B", "AAPL/evil"):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(stock_app.search_stock_code(invalid), (None, None))
 
     @patch("app.fetch_option_context_history", return_value=(pd.DataFrame(),) * 3)
     @patch("app.fetch_yfinance_price_history")

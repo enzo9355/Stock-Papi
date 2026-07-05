@@ -15,7 +15,7 @@ import local_quant
 
 from local_quant import (
     TAIPEI,
-    build_taiwan_stock_snapshot,
+    build_stock_snapshot,
     ensure_layout,
     get_us_symbols,
     load_checkpoint,
@@ -277,7 +277,7 @@ class LocalQuantBatchTests(unittest.TestCase):
             PREDICTION_HORIZON=5,
         )
 
-        payload = build_taiwan_stock_snapshot(pipeline, "2330")
+        payload = build_stock_snapshot(pipeline, "TW", "2330")
 
         self.assertEqual(calls, [("2330", 730)])
         self.assertEqual(payload["as_of"], "2026-07-03")
@@ -297,7 +297,28 @@ class LocalQuantBatchTests(unittest.TestCase):
             PREDICTION_HORIZON=5,
         )
         with self.assertRaises(ValueError):
-            build_taiwan_stock_snapshot(empty, "2330")
+            build_stock_snapshot(empty, "TW", "2330")
+
+    def test_us_snapshot_reuses_existing_pipeline(self):
+        frame = pd.DataFrame(
+            {"Close": [100.0], "AI_P": [63.0]},
+            index=pd.to_datetime(["2026-07-03"]),
+        )
+        frame.index.name = "Date"
+        calls = []
+        pipeline = SimpleNamespace(
+            get_data=lambda symbol, days: calls.append((symbol, days)) or frame.copy(),
+            calc_all=lambda data: data,
+            run_ai_engine=lambda _data: {"accuracy": 55.0},
+            get_stock_name=lambda symbol: f"美股 {symbol}",
+            PREDICTION_HORIZON=5,
+        )
+
+        payload = build_stock_snapshot(pipeline, "US", "AAPL")
+
+        self.assertEqual(calls, [("AAPL", 730)])
+        self.assertEqual(payload["name"], "美股 AAPL")
+        self.assertEqual(payload["latest"]["AI_P"], 63.0)
 
     def test_pipeline_loader_keeps_cloud_secrets_out_of_local_app_import(self):
         with tempfile.TemporaryDirectory() as temporary:
