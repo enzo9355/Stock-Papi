@@ -5,9 +5,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install_local_quant_task.ps1"
 WRAPPER = ROOT / "scripts" / "run_local_quant_task.ps1"
+DOCKERIGNORE = ROOT / ".dockerignore"
+GCLOUDIGNORE = ROOT / ".gcloudignore"
 
 
 class LocalQuantTaskTests(unittest.TestCase):
+    def test_cloud_build_excludes_local_and_untracked_artifacts(self):
+        for path in (DOCKERIGNORE, GCLOUDIGNORE):
+            source = path.read_text(encoding="utf-8")
+            for required in (
+                "0.26.0",
+                "deliverables/",
+                "scripts/build_competition_doc.py",
+                ".deps/",
+                ".env",
+            ):
+                with self.subTest(path=path.name, required=required):
+                    self.assertIn(required, source)
+
     def test_installer_enforces_d_drive_schedule_and_resource_limits(self):
         source = INSTALLER.read_text(encoding="utf-8")
 
