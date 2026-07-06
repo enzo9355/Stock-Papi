@@ -5,11 +5,64 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install_local_quant_task.ps1"
 WRAPPER = ROOT / "scripts" / "run_local_quant_task.ps1"
+UPLOADER = ROOT / "scripts" / "upload_local_quant.ps1"
+LIFECYCLE = ROOT / "config" / "quant-snapshot-lifecycle.json"
 DOCKERIGNORE = ROOT / ".dockerignore"
 GCLOUDIGNORE = ROOT / ".gcloudignore"
 
 
 class LocalQuantTaskTests(unittest.TestCase):
+    def test_uploader_is_allowlisted_atomic_and_non_destructive(self):
+        source = UPLOADER.read_text(encoding="utf-8")
+
+        for required in (
+            r"D:\StockPapiData",
+            "line-stock-bot-498908-quant-snapshots",
+            "Assert-AllowlistedPath",
+            "Get-FileHash",
+            "objects/[0-9a-f]{64}",
+            "manifests/",
+            '"latest-$Market.json"',
+            "gcloud",
+            "storage",
+            "cp",
+            "--no-clobber",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, source)
+        for forbidden in (
+            "Remove-Item",
+            "storage rsync",
+            "--recursive",
+            "service-account.json",
+            "FINMIND_PASSWORD",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
+        self.assertLess(source.index("# Upload objects"), source.index("# Upload manifest"))
+        self.assertLess(
+            source.index("# Upload manifest"), source.index("# Upload latest pointer")
+        )
+
+    def test_lifecycle_deletes_cloud_objects_after_thirty_days(self):
+        source = LIFECYCLE.read_text(encoding="utf-8")
+
+        self.assertIn('"type": "Delete"', source)
+        self.assertIn('"age": 30', source)
+
+    def test_installer_registers_separate_0935_upload_task(self):
+        source = INSTALLER.read_text(encoding="utf-8")
+
+        for required in (
+            "StockPapi-QuantUpload",
+            "upload_local_quant.ps1",
+            "09:35",
+            "New-TimeSpan -Hours 1",
+            "RunLevel Limited",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, source)
+
     def test_cloud_build_excludes_local_and_untracked_artifacts(self):
         for path in (DOCKERIGNORE, GCLOUDIGNORE):
             source = path.read_text(encoding="utf-8")
