@@ -91,6 +91,6 @@ Expected: exit 0。
 Run: `node --check static/app.js` and `git diff --check`
 Expected: exit 0。
 
-- [ ] **Step 2: Commit, push and deploy**
+- [x] **Step 2: Commit, push and deploy**
 
 只 stage 本計畫列出的檔案；推送 `main`，部署既有 `line-stock-bot` Cloud Run 服務，最後確認 `/health` 與 `/market-map` 回傳 200。
