@@ -46,18 +46,46 @@ class MarketInsightsTests(unittest.TestCase):
 
     def test_industries_and_supply_chains_attach_local_metrics(self):
         metrics = {
-            "2330": {"name": "台積電", "prob": 68, "trend": "多頭", "as_of": "2026-07-06"},
-            "2454": {"name": "聯發科", "prob": 61, "trend": "多頭", "as_of": "2026-07-06"},
+            "2330": {
+                "name": "台積電", "prob": 68, "trend": "多頭", "as_of": "2026-07-06",
+                "close": 100, "return_1d": 1.8, "inst_ratio": 1.0,
+                "margin_change": 0.1, "volume_ratio": 1.5,
+            },
+            "2454": {
+                "name": "聯發科", "prob": 52, "trend": "空頭", "as_of": "2026-07-06",
+                "close": 80, "return_1d": -0.6, "inst_ratio": 0.0,
+                "margin_change": 0.0, "volume_ratio": 1.1,
+            },
         }
 
         industries = build_industries({"半導體": ["2454", "2330"]}, metrics)
         chains = build_supply_chains(metrics)
 
         self.assertEqual(industries[0]["leaders"][0]["symbol"], "2330")
+        self.assertEqual(industries[0]["average_prob"], 60.0)
+        self.assertEqual(industries[0]["average_return"], 0.6)
+        self.assertEqual(industries[0]["bullish_ratio"], 50.0)
+        self.assertEqual(industries[0]["coverage"], 2)
+        self.assertEqual(industries[0]["heat_tone"], "rise")
+        self.assertEqual(industries[0]["heat_size"], "sm")
+        self.assertEqual(
+            [(item["label"], item["score"]) for item in industries[0]["chips"]],
+            [("法人", 6), ("融資", 8), ("量能", 6)],
+        )
         semiconductor = next(item for item in chains if item["id"] == "semiconductor")
         tsmc = next(node for stage in semiconductor["stages"] for node in stage["nodes"] if node["symbol"] == "2330")
         self.assertEqual(tsmc["prob"], 68)
         self.assertEqual(tsmc["market"], "TW")
+        self.assertEqual(tsmc["return_1d"], 1.8)
+        self.assertIn("法人偏多", tsmc["signals"])
+
+    def test_industry_tolerates_missing_probability(self):
+        result = build_industries(
+            {"半導體": ["2330"]},
+            {"2330": {"name": "台積電", "prob": None, "trend": "多頭"}},
+        )
+
+        self.assertEqual(result[0]["average_prob"], 0.0)
 
 
 if __name__ == "__main__":

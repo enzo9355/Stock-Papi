@@ -14,6 +14,7 @@ from local_quant import (
     check_free_space,
     cleanup_expired_data,
     ensure_layout,
+    _read_insights_metric,
     load_checkpoint,
     main,
     save_checkpoint,
@@ -27,6 +28,22 @@ def at(hour, minute):
 
 
 class LocalQuantTests(unittest.TestCase):
+    def test_insights_metric_keeps_core_values_when_optional_field_is_dirty(self):
+        document = {
+            "name": "台積電", "as_of": "2026-07-06",
+            "latest": {
+                "AI_P": 68, "Close": 1000, "MA20": 980,
+                "RET_1": "N/A", "INST_NET_RATIO": 0.4,
+            },
+        }
+        with patch("local_quant._validated_artifact", return_value=(None, None, document)):
+            result = _read_insights_metric(Path("."), "2330")
+
+        self.assertEqual(result["prob"], 68)
+        self.assertEqual(result["close"], 1000)
+        self.assertIsNone(result["return_1d"])
+        self.assertEqual(result["inst_ratio"], 0.4)
+
     def test_market_insights_reads_theme_symbols_not_full_universe(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

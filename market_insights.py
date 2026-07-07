@@ -1,4 +1,5 @@
 import datetime
+import math
 import re
 
 
@@ -113,6 +114,36 @@ def normalize_etf_holdings(rows, etf, limit=10):
     }
 
 
+def _number(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _score(value):
+    return max(0, min(10, int(round(value))))
+
+
+def _signals(metric):
+    signals = []
+    probability = _number(metric.get("prob"))
+    institutional = _number(metric.get("inst_ratio"))
+    volume = _number(metric.get("volume_ratio"))
+    if probability is not None and probability >= 60:
+        signals.append("AI偏多")
+    elif probability is not None and probability <= 40:
+        signals.append("AI偏空")
+    if institutional is not None and institutional > 0:
+        signals.append("法人偏多")
+    elif institutional is not None and institutional < 0:
+        signals.append("法人偏空")
+    if volume is not None and volume >= 1.2:
+        signals.append("量能升溫")
+    return signals
+
+
 def build_industries(theme_map, metrics, limit=5):
     industries = []
     for name, symbols in (theme_map or {}).items():
@@ -123,11 +154,45 @@ def build_industries(theme_map, metrics, limit=5):
             metric = (metrics or {}).get(str(symbol).upper())
             if not metric:
                 continue
-            leaders.append({"symbol": str(symbol).upper(), **metric})
+            leaders.append({"symbol": str(symbol).upper(), **metric, "signals": _signals(metric)})
         leaders.sort(key=lambda row: float(row.get("prob") or 0), reverse=True)
         if leaders:
-            industries.append({"name": str(name), "leaders": leaders[:limit]})
-    industries.sort(key=lambda row: float(row["leaders"][0].get("prob") or 0), reverse=True)
+            probabilities = [_number(row.get("prob")) for row in leaders]
+            returns = [_number(row.get("return_1d")) for row in leaders]
+            institutional = [_number(row.get("inst_ratio")) for row in leaders]
+            margin = [_number(row.get("margin_change")) for row in leaders]
+            volume = [_number(row.get("volume_ratio")) for row in leaders]
+            probabilities = [value for value in probabilities if value is not None]
+            returns = [value for value in returns if value is not None]
+            institutional = [value for value in institutional if value is not None]
+            margin = [value for value in margin if value is not None]
+            volume = [value for value in volume if value is not None]
+            average_prob = round(sum(probabilities) / len(probabilities), 1) if probabilities else 0.0
+            average_return = round(sum(returns) / len(returns), 2) if returns else 0.0
+            bullish_ratio = round(
+                sum(1 for row in leaders if row.get("trend") == "多頭") / len(leaders) * 100,
+                1,
+            )
+            industries.append({
+                "name": str(name),
+                "leaders": leaders[:limit],
+                "average_prob": average_prob,
+                "average_return": average_return,
+                "bullish_ratio": bullish_ratio,
+                "coverage": len(leaders),
+                "heat_tone": (
+                    "surge" if average_return >= 1.5 else "rise" if average_return > 0
+                    else "fall" if average_return <= -1.5 else "weak" if average_return < 0
+                    else "flat"
+                ),
+                "heat_size": "lg" if len(leaders) >= 5 else "md" if len(leaders) >= 3 else "sm",
+                "chips": [
+                    {"label": "法人", "score": _score(5 + (sum(institutional) / len(institutional) * 2 if institutional else 0))},
+                    {"label": "融資", "score": _score(5 + (sum(margin) / len(margin) * 50 if margin else 0))},
+                    {"label": "量能", "score": _score(5 + ((sum(volume) / len(volume) - 1) * 5 if volume else 0))},
+                ],
+            })
+    industries.sort(key=lambda row: row["average_prob"], reverse=True)
     return industries
 
 
@@ -144,6 +209,9 @@ def build_supply_chains(metrics):
                     "prob": metric.get("prob"),
                     "trend": metric.get("trend") or "資料待更新",
                     "as_of": metric.get("as_of") or "",
+                    "close": metric.get("close"),
+                    "return_1d": metric.get("return_1d"),
+                    "signals": _signals(metric),
                 })
             stages.append({"name": stage_name, "nodes": nodes})
         chains.append({"id": chain["id"], "name": chain["name"], "stages": stages})

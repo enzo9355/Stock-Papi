@@ -42,10 +42,33 @@ class WebProductTests(unittest.TestCase):
     def test_market_map_renders_industries_mops_etfs_and_supply_chains(self, fetch):
         fetch.return_value = {
             "schema_version": 1, "as_of": "2026-07-06",
-            "industries": [{"name": "半導體", "leaders": []}],
+            "industries": [{
+                "name": "半導體", "average_prob": 62.0, "average_return": 1.8,
+                "bullish_ratio": 75.0, "coverage": 4, "heat_tone": "rise",
+                "heat_size": "md", "chips": [
+                    {"label": "法人", "score": 7},
+                    {"label": "融資", "score": 5},
+                    {"label": "量能", "score": 8},
+                ],
+                "leaders": [{
+                    "symbol": "2330", "name": "台積電", "prob": 68,
+                    "trend": "多頭", "close": 1000, "return_1d": 1.8,
+                    "signals": ["AI偏多", "法人偏多"],
+                }, {
+                    "symbol": "2454", "name": "聯發科", "prob": 61,
+                    "trend": "多頭", "close": None, "return_1d": None,
+                    "signals": [],
+                }],
+            }],
             "mops": [{"code": "2330", "name": "台積電", "title": "重大投資", "published_at": "2026-07-06T09:00:00+08:00", "source": "TWSE"}],
             "etfs": [{"ticker": "0050.TW", "name": "元大台灣50", "market": "TW", "holdings": []}],
-            "supply_chains": [{"id": "semiconductor", "name": "半導體供應鏈", "stages": []}],
+            "supply_chains": [{"id": "semiconductor", "name": "半導體供應鏈", "stages": [{
+                "name": "晶圓製造", "nodes": [{
+                    "symbol": "2330", "name": "台積電", "market": "TW",
+                    "prob": 68, "trend": "多頭", "return_1d": 1.8,
+                    "signals": ["AI偏多"],
+                }],
+            }]}],
             "sources": ["TWSE"],
         }
 
@@ -53,8 +76,13 @@ class WebProductTests(unittest.TestCase):
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        for label in ("產業地圖", "重大資訊 MOPS", "ETF 持倉", "台美日供應鏈", "重大投資"):
+        for label in (
+            "產業地圖", "產業關鍵指標", "產業漲跌熱力圖", "籌碼訊號",
+            "產業角色分群", "+1.8%", "重大資訊 MOPS", "ETF 持倉",
+            "台美日供應鏈", "重大投資",
+        ):
             self.assertIn(label, html)
+
     def test_build_market_heatmap_orders_strongest_first(self):
         cards = [
             {"name": "弱勢", "count": 1, "score": 42, "leader": {"code": "1101", "prob": 42}},

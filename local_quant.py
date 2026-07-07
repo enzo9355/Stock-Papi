@@ -588,11 +588,26 @@ def _read_insights_metric(root, symbol):
         probability = max(0, min(100, int(round(float(latest["AI_P"])))))
         close = float(latest["Close"])
         ma20 = float(latest["MA20"])
+        def optional_number(key, scale=1.0):
+            value = latest.get(key)
+            if value is None:
+                return None
+            try:
+                value = float(value) * scale
+            except (TypeError, ValueError):
+                return None
+            return round(value, 4) if math.isfinite(value) else None
         return {
             "name": str(document.get("name") or symbol),
             "prob": probability,
             "trend": "多頭" if close > ma20 else "空頭",
             "as_of": str(document["as_of"]),
+            "close": round(close, 4),
+            "return_1d": optional_number("RET_1", 100),
+            "inst_ratio": optional_number("INST_NET_RATIO"),
+            "margin_change": optional_number("MARGIN_CHG"),
+            "short_change": optional_number("SHORT_CHG"),
+            "volume_ratio": optional_number("VOL_RATIO"),
         }
     except (KeyError, RuntimeError, TypeError, ValueError):
         return None
