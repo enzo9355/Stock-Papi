@@ -123,6 +123,6 @@ Expected: FAIL，指出上傳順序、fallback 分類與候選覆蓋尚未符合
 
 把 uploader 的 insights 驗證與上傳移到市場迴圈前；用 `build_industries(industry_map, fallback_metrics)` 建立降級資料；正式本地文件先為主題代碼建立名稱與空值，再以有效 artifact 覆蓋；補足半導體製造候選。
 
-- [ ] **Step 4: Verify and publish**
+- [x] **Step 4: Verify and publish**
 
 Run full unittest、Python compile、Node syntax、`git diff --check`；只提交相關檔案，推送並部署。若在批次時段外，只用既有 D 槽 artifact 離線補建洞察，不抓市場資料。
