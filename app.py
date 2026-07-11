@@ -13,7 +13,9 @@ import hashlib
 import hmac
 import io
 import importlib
+import logging
 import math
+import copy
 from concurrent.futures import ThreadPoolExecutor
 from email.utils import parsedate_to_datetime
 from html import escape
@@ -25,7 +27,7 @@ import json
 
 from market_insights import build_industries, build_supply_chains
 
-from flask import Flask, request, abort, render_template, jsonify, redirect, url_for
+from flask import Flask, request, abort, render_template, jsonify, redirect, url_for, Response
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
@@ -36,6 +38,107 @@ from line_state import (
     FirestoreStore, StateError, StoreError, add_alert, add_watch,
     consume_pending, evaluate_alert, remove_watch, start_pending, top_signals,
 )
+from reporting.exceptions import ReportWebError
+from reporting.web import find_report, validate_report_index
+
+
+def redact_secrets(text: str, extra_secrets: list[str] | None = None) -> str:
+    def _redact_key_value(match):
+        quote = match.group(2) or ""
+        if quote:
+            return f"{match.group(1)}{quote}********{quote}"
+        return f"{match.group(1)}********"
+
+    redacted = str(text)
+    redacted = re.sub(
+        r"(?i)\b(Bearer)\s+[A-Za-z0-9._~+/=-]+",
+        r"\1 ********",
+        redacted,
+    )
+    redacted = re.sub(
+        (
+            r"(?i)([\"']?\b(?:access_token|refresh_token|id_token|api_token|"
+            r"client_secret|api_key|api-key|apikey|password|passwd|secret|"
+            r"token|pwd)\b[\"']?\s*(?::=|[:=])\s*)"
+            r"(?:([\"'])(.*?)\2|([^\"'\s,;&}]+))"
+        ),
+        _redact_key_value,
+        redacted,
+    )
+    for secret in extra_secrets or []:
+        secret_text = str(secret)
+        if len(secret_text) >= 8:
+            redacted = re.sub(re.escape(secret_text), "********", redacted)
+    return redacted
+
+
+def safe_exception_text(exc: Exception, extra_secrets: list[str] | None = None) -> str:
+    return redact_secrets(str(exc), extra_secrets=extra_secrets)
+
+
+class RedactingFormatter(logging.Formatter):
+    def __init__(
+        self,
+        fmt=None,
+        datefmt=None,
+        style="%",
+        validate=True,
+        *,
+        defaults=None,
+        secrets_provider=None,
+        original_formatter=None,
+    ):
+        super().__init__(
+            fmt=fmt,
+            datefmt=datefmt,
+            style=style,
+            validate=validate,
+            defaults=defaults,
+        )
+        self._secrets_provider = secrets_provider or (lambda: ())
+        self._original_formatter = original_formatter
+
+    def format(self, record):
+        record_copy = copy.copy(record)
+        formatted = (
+            self._original_formatter.format(record_copy)
+            if self._original_formatter
+            else super().format(record_copy)
+        )
+        if record.levelno < logging.WARNING:
+            return formatted
+        return redact_secrets(formatted, self._get_extra_secrets())
+
+    def _get_extra_secrets(self):
+        try:
+            return [secret for secret in (self._secrets_provider() or []) if secret]
+        except Exception:
+            return []
+
+
+def _iter_existing_loggers():
+    yield logging.getLogger()
+    for logger_ref in logging.Logger.manager.loggerDict.values():
+        if isinstance(logger_ref, logging.Logger):
+            yield logger_ref
+
+
+def _install_redacting_formatter(handler, secrets_provider=None):
+    current = handler.formatter or logging.Formatter()
+    if isinstance(current, RedactingFormatter):
+        return
+    handler.setFormatter(
+        RedactingFormatter(
+            secrets_provider=secrets_provider,
+            original_formatter=current,
+        )
+    )
+
+
+def install_redacting_formatters(secrets_provider=None):
+    for log in _iter_existing_loggers():
+        for handler in log.handlers:
+            _install_redacting_formatter(handler, secrets_provider)
 
 
 class _LazyModule:
@@ -87,29 +190,65 @@ OPENALICE_API_URL = (os.getenv("OPENALICE_API_URL") or "").strip()
 OPENALICE_API_TOKEN = (os.getenv("OPENALICE_API_TOKEN") or "").strip()
 MARKETAUX_API_TOKEN = (os.getenv("MARKETAUX_API_TOKEN") or "").strip()
 QUANT_SNAPSHOT_BUCKET = (os.getenv("QUANT_SNAPSHOT_BUCKET") or "").strip()
+SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip()
+SUPABASE_KEY = (os.getenv("SUPABASE_KEY") or "").strip()
+finmind_token = None
 SENTIMENT_WINDOW_DAYS = 30
+REPORT_PDF_MAX_BYTES = 15 * 1024 * 1024
+REPORT_INDEX_MAX_BYTES = 1024 * 1024
 LINE_STATE_READ_BUDGET_SECONDS = 0.25
 LINE_STATE_READ_MAX_WORKERS = 4
 _line_state_read_slots = threading.BoundedSemaphore(LINE_STATE_READ_MAX_WORKERS)
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 1_000_000
+SAMPLE_REPORT_FILENAME = "stock-papi-tw-industry-daily-SAMPLE.pdf"
+SAMPLE_REPORT_PATH = os.path.join(app.root_path, "static", "samples", SAMPLE_REPORT_FILENAME)
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
-line_store = FirestoreStore(GCP_PROJECT_ID) if GCP_PROJECT_ID else None
+supabase_client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        from supabase import create_client
+        supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception:
+        pass
+
+if supabase_client:
+    from line_state import SupabaseStore
+    line_store = SupabaseStore(supabase_client)
+else:
+    line_store = FirestoreStore(GCP_PROJECT_ID) if GCP_PROJECT_ID else None
 
 gemini_model = _LazyGeminiModel(GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-import logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 logger = logging.getLogger("app")
 
+
+def runtime_logging_secrets():
+    return (
+        LINE_CHANNEL_ACCESS_TOKEN,
+        LINE_CHANNEL_SECRET,
+        FINMIND_PASSWORD,
+        GEMINI_API_KEY,
+        BROADCAST_TOKEN,
+        ALERT_TASK_TOKEN,
+        OPENALICE_API_TOKEN,
+        MARKETAUX_API_TOKEN,
+        SUPABASE_KEY,
+        finmind_token,
+    )
+
+
+install_redacting_formatters(runtime_logging_secrets)
+
 # Pre-warming credentials and tokens at startup to prevent concurrent refresh races
 try:
-    if line_store:
+    if line_store and hasattr(line_store, "_access_token"):
         logger.info("Pre-warming Firestore token provider...")
         line_store._access_token()
         logger.info("Firestore token provider pre-warmed successfully.")
@@ -128,7 +267,6 @@ try:
 except Exception as e:
     logger.warning(f"Failed to pre-warm default credentials on startup: {e}")
 
-finmind_token = None
 _FINMIND_BLOCKED_UNTIL = 0
 CATEGORY_PAGE_SIZE = 12
 SECTOR_SCAN_LIMIT = 20
@@ -214,7 +352,7 @@ def fetch_finmind_dataset(dataset, code, start_date, end_date):
         response.raise_for_status()
         return pd.DataFrame(response.json().get("data", []))
     except (requests.RequestException, ValueError, TypeError) as exc:
-        print(f"FinMind {dataset} 讀取失敗: {exc}")
+        logger.warning("FinMind %s 讀取失敗: %s", dataset, exc)
         return pd.DataFrame()
 
 
@@ -248,7 +386,7 @@ def fetch_yfinance_price_history(tickers, start_date, end_date=None):
                 _YFINANCE_CACHE[cache_key] = (frame.copy(), now)
                 return frame
     except Exception as exc:
-        print(f"Yahoo Finance 讀取失敗: {exc}")
+        logger.warning("Yahoo Finance 讀取失敗: %s", exc)
     return pd.DataFrame()
 
 
@@ -266,7 +404,7 @@ def fetch_option_context_history(start_date, end_date=None):
             try:
                 frames[symbol] = future.result()
             except Exception as exc:
-                print(f"選擇權市場指標讀取失敗 ({symbol}): {exc}")
+                logger.warning("選擇權市場指標讀取失敗 (%s): %s", symbol, exc)
                 frames[symbol] = pd.DataFrame()
     return tuple(frames[symbol] for symbol in symbols)
 
@@ -297,20 +435,47 @@ def search_stock_code(keyword):
     return None, None
 
 
-def _gcs_get_object(object_name, max_bytes):
+def get_gcp_access_token():
+    if line_store and hasattr(line_store, "token_provider"):
+        try:
+            return line_store.token_provider()
+        except Exception:
+            pass
+    try:
+        import google.auth
+        import google.auth.transport.requests
+        credentials, project = google.auth.default()
+        auth_request = google.auth.transport.requests.Request()
+        credentials.refresh(auth_request)
+        return credentials.token
+    except Exception:
+        try:
+            res = requests.get(
+                "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+                headers={"Metadata-Flavor": "Google"},
+                timeout=3
+            )
+            if res.status_code == 200:
+                return res.json().get("access_token")
+        except Exception:
+            pass
+    return None
+
+
+def _gcs_get_allowed_object(object_name, max_bytes, allowed_prefix):
     if (
         not QUANT_SNAPSHOT_BUCKET
         or line_store is None
         or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]", QUANT_SNAPSHOT_BUCKET)
         or not isinstance(object_name, str)
-        or not object_name.startswith("quant/v1/")
+        or not object_name.startswith(allowed_prefix)
         or type(max_bytes) is not int
         or max_bytes < 1
     ):
         return None
     response = None
     try:
-        token = line_store.token_provider()
+        token = get_gcp_access_token()
         response = requests.get(
             "https://storage.googleapis.com/storage/v1/b/"
             f"{QUANT_SNAPSHOT_BUCKET}/o/{urllib.parse.quote(object_name, safe='')}?alt=media",
@@ -334,6 +499,23 @@ def _gcs_get_object(object_name, max_bytes):
     finally:
         if response is not None:
             response.close()
+
+
+def _gcs_get_object(object_name, max_bytes):
+    """只允許讀取既有 quant/v1 私有物件。"""
+    return _gcs_get_allowed_object(object_name, max_bytes, "quant/v1/")
+
+
+def _gcs_get_report_object(object_name, max_bytes):
+    """只允許讀取 reports/v1 私有物件。"""
+    return _gcs_get_allowed_object(object_name, max_bytes, "reports/v1/")
+
+
+def _published_report_index():
+    content = _gcs_get_report_object("reports/v1/index-TW.json", REPORT_INDEX_MAX_BYTES)
+    if content is None:
+        return None
+    return validate_report_index(content)
 
 
 def _published_quant_manifest(market, today=None):
@@ -1276,7 +1458,7 @@ def run_ai_engine(df):
             )
         return metrics
     except Exception as e:
-        print(f"回測引擎錯誤: {e}")
+        logger.error("回測引擎錯誤: %s", e)
         return None
 
 def get_ai_insight_for_broadcast(name, data, bt, news):
@@ -2458,6 +2640,79 @@ def build_stock_flex_message(code, name, data, url, watched=False):
     color_trend = "#10b981" if "多" in data['trend'] else "#ef4444"
     sentiment_summary = _format_sentiment_summary(data)
 
+    body_contents = []
+    try:
+        tz_taipei = datetime.timezone(datetime.timedelta(hours=8), "Asia/Taipei")
+        today = datetime.datetime.now(tz_taipei).date()
+        as_of_date = datetime.date.fromisoformat(data["as_of"])
+        if (today - as_of_date).days >= 1:
+            body_contents.append({
+                "type": "box",
+                "layout": "horizontal",
+                "backgroundColor": "#fffbeb",
+                "borderColor": "#fef3c7",
+                "borderWidth": "1px",
+                "cornerRadius": "6px",
+                "paddingAll": "8px",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": f"⚠️ 數據延遲：此預測基於 {data['as_of']} 的市場數據。",
+                        "color": "#b45309",
+                        "size": "xs",
+                        "wrap": True,
+                        "weight": "bold"
+                    }
+                ]
+            })
+    except Exception:
+        pass
+
+    body_contents.extend([
+        {
+            "type": "box",
+            "layout": "horizontal",
+            "contents": [
+                { "type": "text", "text": "💰 最新收盤", "color": "#64748b", "size": "sm", "flex": 4 },
+                { "type": "text", "text": f"{data['price']:.2f}", "color": "#0f172a", "size": "md", "weight": "bold", "align": "end", "flex": 5 }
+            ]
+        },
+        {
+            "type": "box",
+            "layout": "horizontal",
+            "contents": [
+                { "type": "text", "text": "📈 當前趨勢", "color": "#64748b", "size": "sm", "flex": 4 },
+                { "type": "text", "text": data['trend'], "color": color_trend, "size": "md", "weight": "bold", "align": "end", "flex": 5 }
+            ]
+        },
+        {
+            "type": "box",
+            "layout": "horizontal",
+            "contents": [
+                { "type": "text", "text": "🌡 新聞／輿論情緒", "color": "#64748b", "size": "sm", "flex": 4, "wrap": True },
+                { "type": "text", "text": f"{data['s_status']} ({data['s_score']:.1f})", "color": color_s, "size": "md", "weight": "bold", "align": "end", "flex": 5 }
+            ]
+        },
+        {
+            "type": "text",
+            "text": sentiment_summary,
+            "color": "#64748b",
+            "size": "xs",
+            "align": "end",
+            "wrap": True
+        },
+        { "type": "separator", "margin": "md", "color": "#cbd5e1" },
+        {
+            "type": "box",
+            "layout": "horizontal",
+            "margin": "md",
+            "contents": [
+                { "type": "text", "text": "🎯 五日上漲機率", "color": "#0f172a", "size": "md", "weight": "bold", "flex": 4 },
+                { "type": "text", "text": f"{data['prob']}%", "color": color_prob, "size": "lg", "weight": "bold", "align": "end", "flex": 5 }
+            ]
+        }
+    ])
+
     return {
         "type": "bubble",
         "size": "mega",
@@ -2482,50 +2737,7 @@ def build_stock_flex_message(code, name, data, url, watched=False):
             "backgroundColor": "#f8fafc",
             "paddingAll": "20px",
             "spacing": "md",
-            "contents": [
-                {
-                    "type": "box",
-                    "layout": "horizontal",
-                    "contents": [
-                        { "type": "text", "text": "💰 最新收盤", "color": "#64748b", "size": "sm", "flex": 4 },
-                        { "type": "text", "text": f"{data['price']:.2f}", "color": "#0f172a", "size": "md", "weight": "bold", "align": "end", "flex": 5 }
-                    ]
-                },
-                {
-                    "type": "box",
-                    "layout": "horizontal",
-                    "contents": [
-                        { "type": "text", "text": "📈 當前趨勢", "color": "#64748b", "size": "sm", "flex": 4 },
-                        { "type": "text", "text": data['trend'], "color": color_trend, "size": "md", "weight": "bold", "align": "end", "flex": 5 }
-                    ]
-                },
-                {
-                    "type": "box",
-                    "layout": "horizontal",
-                    "contents": [
-                        { "type": "text", "text": "🌡 新聞／輿論情緒", "color": "#64748b", "size": "sm", "flex": 4, "wrap": True },
-                        { "type": "text", "text": f"{data['s_status']} ({data['s_score']:.1f})", "color": color_s, "size": "md", "weight": "bold", "align": "end", "flex": 5 }
-                    ]
-                },
-                {
-                    "type": "text",
-                    "text": sentiment_summary,
-                    "color": "#64748b",
-                    "size": "xs",
-                    "align": "end",
-                    "wrap": True
-                },
-                { "type": "separator", "margin": "md", "color": "#cbd5e1" },
-                {
-                    "type": "box",
-                    "layout": "horizontal",
-                    "margin": "md",
-                    "contents": [
-                        { "type": "text", "text": "🎯 五日上漲機率", "color": "#0f172a", "size": "md", "weight": "bold", "flex": 4 },
-                        { "type": "text", "text": f"{data['prob']}%", "color": color_prob, "size": "lg", "weight": "bold", "align": "end", "flex": 5 }
-                    ]
-                }
-            ]
+            "contents": body_contents
         },
         "footer": {
             "type": "box",
@@ -3285,6 +3497,78 @@ def search_page():
 def watchlist_page():
     return redirect("/dashboard", code=302)
 
+
+@app.route("/reports")
+def reports_page():
+    try:
+        reports = _published_report_index()
+    except ReportWebError:
+        reports = None
+    return render_template("reports.html", reports=reports or [], unavailable=reports is None)
+
+
+def _report_pdf_response(report_date, disposition):
+    try:
+        parsed = datetime.date.fromisoformat(report_date)
+    except ValueError:
+        abort(404)
+    if parsed.isoformat() != report_date:
+        abort(404)
+    try:
+        reports = _published_report_index()
+    except ReportWebError:
+        return "報告服務暫時無法使用", 503
+    if reports is None:
+        return "報告服務暫時無法使用", 503
+    item = find_report(reports, report_date)
+    if item is None:
+        abort(404)
+    content = _gcs_get_report_object(f"reports/v1/{item['pdf_path']}", item["pdf_size"])
+    if (
+        content is None
+        or len(content) != item["pdf_size"]
+        or not hmac.compare_digest(hashlib.sha256(content).hexdigest(), item["pdf_sha256"])
+    ):
+        return "報告檔案暫時無法使用", 503
+    filename = f"stock-papi-tw-industry-daily-{report_date}.pdf"
+    response = Response(content, mimetype="application/pdf")
+    response.headers["Content-Disposition"] = f'{disposition}; filename="{filename}"'
+    response.headers["ETag"] = f'"{item["pdf_sha256"]}"'
+    response.headers["Cache-Control"] = "public, max-age=3600, immutable"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+def _sample_report_response():
+    try:
+        with open(SAMPLE_REPORT_PATH, "rb") as stream:
+            content = stream.read(REPORT_PDF_MAX_BYTES + 1)
+    except OSError:
+        return "SAMPLE 報告暫時無法使用", 503
+    if not content.startswith(b"%PDF") or len(content) > REPORT_PDF_MAX_BYTES:
+        return "SAMPLE 報告暫時無法使用", 503
+    response = Response(content, mimetype="application/pdf")
+    response.headers["Content-Disposition"] = f'attachment; filename="{SAMPLE_REPORT_FILENAME}"'
+    response.headers["Cache-Control"] = "public, max-age=3600, immutable"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+@app.route("/reports/<report_date>/preview")
+def report_preview(report_date):
+    return _report_pdf_response(report_date, "inline")
+
+
+@app.route("/reports/<report_date>/download")
+def report_download(report_date):
+    return _report_pdf_response(report_date, "attachment")
+
+
+@app.route("/reports/sample/download")
+def sample_report_download():
+    return _sample_report_response()
+
+
 @app.route("/api/dashboard")
 def dashboard_api():
     market = analyze("TAIEX")
@@ -3717,7 +4001,7 @@ def _handle_message_impl(event):
                 reply = call_papi_gemini_fallback(prompt)
                 _reply_text(event, reply or "Papi 分析服務尚未設定。")
             except Exception as exc:
-                print(f"Papi Gemini fallback failed: {exc}")
+                logger.error("Papi Gemini fallback failed: %s", exc)
                 _reply_text(event, "Papi AI 摘要暫時失敗；你仍可直接輸入股票代號查看完整量化分析。")
         return
 

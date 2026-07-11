@@ -127,6 +127,8 @@ python app.py
 | `FINMIND_USER`、`FINMIND_PASSWORD` | 選用 | FinMind 登入與額度 |
 | `GCP_PROJECT_ID` | 選用 | 啟用 Firestore 狀態 |
 | `QUANT_SNAPSHOT_BUCKET` | 選用 | 私有 GCS 本地量化快照 |
+| `REPORT_FONT_PATH` | 本地日報必要 | 可合法使用、支援繁體中文的 regular TTF 字型絕對路徑 |
+| `REPORT_FONT_BOLD_PATH` | 本地日報必要 | 可合法使用、支援繁體中文的 bold TTF 字型絕對路徑 |
 | `ALERT_TASK_TOKEN` | 選用 | 保護提醒排程端點 |
 | `BROADCAST_TOKEN` | 選用 | 保護週報廣播端點 |
 | `MARKETAUX_API_TOKEN` | 選用 | 第二新聞來源與情緒交叉驗證 |
@@ -159,6 +161,93 @@ python -m py_compile app.py line_state.py local_quant.py market_insights.py
 node --check static/app.js
 git diff --check
 ```
+
+## 台股產業量化分析日報
+
+日報只在 Windows 本地讀取已完成的 TW 快照、計算產業統計與回測並生成 PDF。Cloud Run 只讀取私有 GCS 中已驗證的 index 與 PDF，不會在 HTTP request、Flask 啟動或 LINE webhook 產生報告。
+
+### 安裝本地報告環境
+
+```powershell
+python -m pip install -r requirements.txt
+python -m pip install -r requirements-report.txt
+```
+
+PDF 字型不放進 Git。請指定本機合法存在、ReportLab 可內嵌且支援繁體中文的 TTF 字型：
+
+```powershell
+$env:REPORT_FONT_PATH='C:\Windows\Fonts\NotoSansTC-VF.ttf'
+$env:REPORT_FONT_BOLD_PATH='C:\Windows\Fonts\NotoSansTC-VF.ttf'
+$env:REPORT_TITLE_FONT_PATH='C:\Windows\Fonts\NotoSerifTC-VF.ttf'
+```
+
+若字型不存在、不可讀或無法內嵌，生成流程會失敗並保留上一份正式 `latest-TW.json`，不會輸出缺字方塊的正式報告。
+
+舊版 TW manifest 若缺少 `uncompressed_size`，日報 loader 會維持拒絕。先執行一次性安全 migration；它不抓行情、不重訓模型、不修改舊 manifest，只有全部股票通過 SHA-256、壓縮大小、限額串流解壓與 schema／日期驗證後，才建立新 immutable manifest 並最後替換 latest：
+
+```powershell
+python -m reporting.migrate_quant_manifest `
+  --root D:\StockPapiData `
+  --market TW `
+  --latest quant\v1\latest-TW.json `
+  --dry-run
+
+python -m reporting.migrate_quant_manifest `
+  --root D:\StockPapiData `
+  --market TW `
+  --latest quant\v1\latest-TW.json
+```
+
+dry-run 輸出包含驗證成功／失敗數、最大壓縮大小、最大解壓大小與 manifest 日期；任一股票失敗時不更新 `latest-TW.json`。
+
+### CLI
+
+```powershell
+python -m reporting.cli `
+  --root D:\StockPapiData `
+  --market TW
+```
+
+可選參數：`--output-dir`、`--font-path`、`--font-bold-path`、`--title-font-path`、`--dry-run`、`--report-date`。未指定 `--report-date` 時，報告交易日固定使用已驗證 manifest 的 `market_as_of`，不使用系統今天日期。`--dry-run` 只驗證真實快照與分析結果，不生成、不發布，也不以 sample data 補正式資料。
+
+資料來源固定為：
+
+```text
+D:\StockPapiData\publish\quant\v1\latest-TW.json
+D:\StockPapiData\publish\quant\v1\manifests\
+D:\StockPapiData\publish\quant\v1\objects\
+```
+
+正式發布格式為：
+
+```text
+D:\StockPapiData\publish\reports\v1\
+├── objects\<pdf_sha256>.pdf
+├── metadata\<metadata_sha256>.json
+├── index-TW.json
+└── latest-TW.json
+```
+
+產業近期報酬採有效成分股等權平均，缺失值不補零。產業回測每五個台股交易日再平衡一次，只使用具有完整未來五日價格的歷史 OOS `AI_P`，`AI_P >= 60` 才等權持有，單次完整持有扣除 `0.585%`，禁止重疊；Sharpe 使用 `sqrt(252 / 5)` 年化。最新尚未實現的五日預測不納入歷史績效。
+
+排程流程在台股批次確實發布新 manifest 後執行 `python -m reporting.cli`。日報失敗只更新 `D:\StockPapiData\logs\report-status.json` 並記錄 warning，不阻止後續美股批次。09:35 uploader 驗證後依序上傳 PDF object、metadata、`index-TW.json`，最後才替換 GCS `latest-TW.json`；驗證失敗不影響 quant snapshot，也不覆蓋上一份成功報告。
+
+Web 路由：
+
+- `GET /reports`：Jinja 歷史報告清單與 empty state。
+- `GET /reports/<report_date>/preview`：已驗證 PDF inline 預覽。
+- `GET /reports/<report_date>/download`：已驗證 PDF attachment 下載。
+
+手動驗證：
+
+```powershell
+python -m unittest tests.test_daily_report_source tests.test_industry_report_analytics tests.test_industry_report_backtest -v
+python -m unittest tests.test_daily_report_pdf tests.test_daily_report_publish tests.test_report_web -v
+python scripts/generate_sample_daily_report.py --font-path C:\Windows\Fonts\NotoSansTC-VF.ttf --font-bold-path C:\Windows\Fonts\NotoSansTC-VF.ttf --title-font-path C:\Windows\Fonts\NotoSerifTC-VF.ttf
+Get-Content 'D:\StockPapiData\logs\report-status.json'
+```
+
+常見故障：`manifest hash mismatch`、`stock object size or hash mismatch` 代表快照不可信，應先修復本地量化發布；`REPORT_FONT_PATH` 錯誤代表字型不存在、不可讀或不是 ReportLab 支援的 TrueType outlines；PDF 驗證失敗時檢查 `requirements-report.txt` 是否已安裝。正式流程不會自動改用 mock data。
 
 ## Cloud Run 部署
 

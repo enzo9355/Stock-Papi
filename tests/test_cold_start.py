@@ -19,7 +19,10 @@ class ColdStartTests(unittest.TestCase):
 import sys
 import app
 
-heavy = ("pandas", "numpy", "sklearn", "lightgbm", "google.generativeai")
+heavy = (
+    "pandas", "numpy", "sklearn", "lightgbm", "google.generativeai",
+    "matplotlib", "reportlab", "pypdf",
+)
 loaded = [name for name in heavy if name in sys.modules]
 if loaded:
     raise SystemExit("loaded during startup: " + ", ".join(loaded))
