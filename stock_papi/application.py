@@ -133,6 +133,7 @@ from stock_papi.services.market import (
 from stock_papi.web.routes.reports import register_report_routes
 from stock_papi.web.routes.dashboard import register_dashboard_page
 from stock_papi.web.routes.system import register_system_routes
+from stock_papi.web.routes.market import register_market_routes
 
 
 def redact_secrets(text: str, extra_secrets: list[str] | None = None) -> str:
@@ -2138,38 +2139,6 @@ register_report_routes(
 )
 
 
-@app.route("/api/dashboard")
-def dashboard_api():
-    market = analyze("TAIEX")
-    if not market:
-        return jsonify({"error": "market data unavailable"}), 503
-    sector_cards = dashboard_sector_cards()
-    sectors = [
-        {"name": name, "count": len(codes)}
-        for name, codes in list(industry_map.items())[:8]
-    ]
-    return jsonify({
-        "market": {
-            "price": float(market["price"]),
-            "prob": int(market["prob"]),
-            "trend": market["trend"],
-            "as_of": str(market.get("as_of") or ""),
-            "sentiment_status": str(market.get("s_status") or "資料不足"),
-            "sentiment_score": round(_safe_float(market.get("s_score")), 1),
-            "confidence": str(market.get("news_confidence") or "低"),
-        },
-        "opportunities": cached_opportunities(),
-        "sector_cards": sector_cards,
-        "heatmap": build_market_heatmap(sector_cards),
-        "top_picks": dashboard_top_picks(sector_cards),
-        "watchlist_hint": {
-            "title": "關注與提醒在 LINE 管理",
-            "steps": ["在 LINE 查詢個股", "點選加入關注", "從提醒管理設定通知"],
-        },
-        "sectors": sectors,
-    })
-
-
 def market_insights_payload():
     document = fetch_market_insights()
     if document:
@@ -2197,37 +2166,21 @@ def market_insights_payload():
     }
 
 
-@app.route("/api/market-insights")
-def market_insights_api():
-    return jsonify(market_insights_payload())
+register_market_routes(
+    app,
+    analyze=lambda code: analyze(code),
+    dashboard_sector_cards=lambda: dashboard_sector_cards(),
+    cached_opportunities=lambda: cached_opportunities(),
+    build_market_heatmap=build_market_heatmap,
+    dashboard_top_picks=dashboard_top_picks,
+    industry_map=lambda: industry_map,
+    market_insights_payload=lambda: market_insights_payload(),
+    twstock_codes=lambda: twstock.codes,
+    is_us_ticker=is_us_ticker,
+    find_industry_peers=lambda code: find_industry_peers(code),
+    get_stock_name=lambda code: get_stock_name(code),
+)
 
-
-@app.route("/market-map")
-def market_map_page():
-    return render_template("market_map.html", insights=market_insights_payload())
-
-@app.route("/stock/<code>")
-def stock_page(code):
-    code = code.upper()
-    if code not in twstock.codes and not is_us_ticker(code):
-        abort(404)
-    d = analyze(code)
-    peer_group = find_industry_peers(code)
-    peers = [
-        {"code": peer, "name": get_stock_name(peer)}
-        for peer in peer_group["codes"]
-    ]
-    return render_template(
-        "stock_detail.html",
-        d=d,
-        peers=peers,
-        peer_category=peer_group["category"],
-    ) if d else "查無資料"
-
-@app.route("/market")
-def market_page():
-    d = analyze("TAIEX")
-    return render_template("stock_detail.html", d=d) if d else "資料更新中"
 
 @app.route("/callback", methods=["POST"])
 def callback():
