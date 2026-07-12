@@ -44,6 +44,8 @@ def quant_cloud_payloads(
         "model_version": "lgbm-5d-v1",
     }
     entry.update(entry_changes or {})
+    if entry.pop("_drop_uncompressed_size", False):
+        entry.pop("uncompressed_size")
     manifest = {
         "schema_version": 2,
         "market": market,
@@ -207,7 +209,7 @@ class PredictionPipelineTests(unittest.TestCase):
             ("bad-sha", quant_cloud_payloads(entry_changes={"sha256": "0" * 64})),
             (
                 "missing-uncompressed-size",
-                quant_cloud_payloads(entry_changes={"uncompressed_size": None}),
+                quant_cloud_payloads(entry_changes={"_drop_uncompressed_size": True}),
             ),
             (
                 "oversized-uncompressed-size",
