@@ -131,6 +131,8 @@ from stock_papi.services.market import (
     sector_signal_score,
 )
 from stock_papi.web.routes.reports import register_report_routes
+from stock_papi.web.routes.dashboard import register_dashboard_page
+from stock_papi.web.routes.system import register_system_routes
 
 
 def redact_secrets(text: str, extra_secrets: list[str] | None = None) -> str:
@@ -2120,35 +2122,8 @@ def build_sector_signal_carousel(category, items):
     }
 
 
-@app.route("/")
-@app.route("/dashboard")
-def dashboard_page():
-    return render_template(
-        "dashboard.html",
-        search_query=request.args.get("q", "").strip(),
-        search_error=request.args.get("error") == "not-found",
-    )
-
-
-@app.route("/health")
-@app.route("/healthz")
-def healthz():
-    return "ok", 200
-
-
-@app.route("/search")
-def search_page():
-    query = request.args.get("q", "").strip()
-    code, _name = search_stock_code(query)
-    if code:
-        return redirect(url_for("stock_page", code=code), code=302)
-    return redirect(
-        url_for("dashboard_page", q=query, error="not-found"), code=302
-    )
-
-@app.route("/watchlist")
-def watchlist_page():
-    return redirect("/dashboard", code=302)
+register_dashboard_page(app)
+register_system_routes(app, search_stock=lambda query: search_stock_code(query))
 
 
 register_report_routes(
