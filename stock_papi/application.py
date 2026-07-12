@@ -85,6 +85,7 @@ from stock_papi.integrations.line.flex import (
     build_welcome_flex,
 )
 from stock_papi.integrations.line.notifications import run_alert_checks
+from stock_papi.integrations.market_data.tw_exchange import fetch_market_activity
 from stock_papi.integrations.news.provider import (
     fetch_marketaux_news as _fetch_marketaux_news,
     fetch_news_rss,
@@ -123,6 +124,14 @@ from stock_papi.services.sentiment import (
     score_news_item,
 )
 from stock_papi.services.dashboard import build_market_heatmap, dashboard_top_picks
+from stock_papi.services.market import (
+    build_market_map as _build_market_map,
+    build_sector_signal_snapshot as _build_sector_signal_snapshot,
+    find_industry_peers as _find_industry_peers,
+    sector_candidates,
+    sector_signal_item as _sector_signal_item,
+    sector_signal_score,
+)
 
 
 def redact_secrets(text: str, extra_secrets: list[str] | None = None) -> str:
@@ -1757,147 +1766,30 @@ def call_papi_gemini_fallback(prompt):
             raise
 
 
-def sector_signal_score(data):
-    bt = data.get("bt") or {}
-    foreign = data.get("foreign_flow") or {}
-    prob = _safe_float(data.get("prob"))
-    strat_bonus = _clamp(_safe_float(bt.get("strat_cum")), -20.0, 20.0) * 0.35
-    foreign_bonus = _clamp(_safe_float(foreign.get("net_5")) / 1000.0, -5.0, 5.0)
-    drawdown_penalty = min(abs(_safe_float(bt.get("mdd"))), 30.0) * 0.15
-    return round(prob + strat_bonus + foreign_bonus - drawdown_penalty, 2)
-
-
-def fetch_market_activity():
-    sources = (
-        (
-            "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
-            "Code", "TradeValue", "TradeVolume",
-        ),
-        (
-            "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
-            "SecuritiesCompanyCode", "TransactionAmount", "TradingShares",
-        ),
-    )
-    activity = {}
-    for url, code_field, value_field, volume_field in sources:
-        try:
-            response = requests.get(url, timeout=5)
-            response.raise_for_status()
-            rows = response.json()
-            if not isinstance(rows, list):
-                continue
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                code = str(row.get(code_field) or "").strip()
-                if not code:
-                    continue
-                activity[code] = {
-                    "trade_value": _safe_float(str(row.get(value_field) or "0").replace(",", "")),
-                    "trade_volume": _safe_float(str(row.get(volume_field) or "0").replace(",", "")),
-                }
-        except (requests.RequestException, AttributeError, TypeError, ValueError):
-            continue
-    return activity
-
-
-def sector_candidates(category, codes, limit=SECTOR_SCAN_LIMIT, activity=None):
-    selected = []
-    seen = set()
-    for code in codes:
-        code = str(code).strip()
-        if code in seen or not code.isdigit() or len(code) not in (4, 5):
-            continue
-        if category != "ETF專區" and code.startswith("00"):
-            continue
-        selected.append(code)
-        seen.add(code)
-    if activity:
-        selected.sort(
-            key=lambda code: (
-                _safe_float((activity.get(code) or {}).get("trade_value")),
-                _safe_float((activity.get(code) or {}).get("trade_volume")),
-            ),
-            reverse=True,
-        )
-    return selected[:limit]
-
-
 def sector_signal_item(code, data):
-    if not data or not isinstance(data.get("as_of"), str):
-        return None
-    bt = data.get("bt") or {}
-    foreign = data.get("foreign_flow") or {}
-    return {
-        "code": code,
-        "name": data.get("name") or get_stock_name(code),
-        "price": _safe_float(data.get("price")),
-        "prob": int(round(_safe_float(data.get("prob")))),
-        "trend": data.get("trend") or "中性",
-        "score": sector_signal_score(data),
-        "strat_cum": _safe_float(bt.get("strat_cum")),
-        "mdd": _safe_float(bt.get("mdd")),
-        "foreign_net_5": _safe_float(foreign.get("net_5")),
-        "as_of": data["as_of"],
-    }
+    return _sector_signal_item(code, data, get_stock_name=get_stock_name)
 
 
 def build_sector_signal_snapshot(market_map, analyze_fn, now=None, activity=None):
-    now = now or datetime.datetime.utcnow()
-    sectors = {}
-    dates = []
-    scan_limit = max(SECTOR_SCAN_LIMIT, SECTOR_DISPLAY_LIMIT * 6)
-    for category, codes in market_map.items():
-        items = []
-        for code in sector_candidates(category, codes, limit=scan_limit, activity=activity):
-            try:
-                item = sector_signal_item(code, analyze_fn(code))
-            except Exception:
-                item = None
-            if item:
-                items.append(item)
-                dates.append(item["as_of"])
-                if len(items) >= SECTOR_DISPLAY_LIMIT:
-                    break
-        items.sort(key=lambda item: item["score"], reverse=True)
-        sectors[category] = items
-    return {
-        "as_of": max(dates) if dates else now.date().isoformat(),
-        "generated_at": now.replace(microsecond=0).isoformat() + "Z",
-        "sectors": sectors,
-    }
+    return _build_sector_signal_snapshot(
+        market_map,
+        analyze_fn,
+        now=now,
+        activity=activity,
+        scan_limit=SECTOR_SCAN_LIMIT,
+        display_limit=SECTOR_DISPLAY_LIMIT,
+        get_stock_name=get_stock_name,
+    )
 
 
 def build_market_map():
-    market = {"全市場": [], "ETF專區": []}
-    for theme in PAPI_THEME_SECTORS:
-        market[theme] = []
-    for code, info in twstock.codes.items():
-        if len(code) not in [4, 5]: continue
-        grp = getattr(info, "group", None) or getattr(info, "type", None)
-        if grp and isinstance(grp, str) and grp.strip():
-            market["全市場"].append(code)
-            if code.startswith("00"): market["ETF專區"].append(code)
-            for theme, names in PAPI_THEME_SECTORS.items():
-                if info.name in names and code not in market[theme]:
-                    market[theme].append(code)
-    return {k: v for k, v in market.items() if v}
+    return _build_market_map(twstock.codes, PAPI_THEME_SECTORS)
 
 industry_map = build_market_map()
 
 
 def find_industry_peers(code, market_map=None, limit=5):
-    selected = str(code).upper()
-    for category, codes in (market_map or industry_map).items():
-        if category in {"全市場", "ETF專區"}:
-            continue
-        normalized = [str(item).upper() for item in codes]
-        if selected in normalized:
-            return {
-                "category": category,
-                "codes": [item for item in normalized if item != selected][:limit],
-            }
-    return {"category": "", "codes": []}
+    return _find_industry_peers(code, market_map or industry_map, limit=limit)
 
 def build_category_quick_reply(page=1):
     cats = list(industry_map.keys())
