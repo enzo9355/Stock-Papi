@@ -25,7 +25,7 @@ import json
 
 from market_insights import build_industries, build_supply_chains
 
-from flask import Flask, request, abort, render_template, jsonify, redirect, url_for, Response
+from flask import Flask, request, abort, render_template, jsonify, redirect, url_for
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
@@ -36,8 +36,6 @@ from line_state import (
     FirestoreStore, StateError, StoreError, add_alert, add_watch,
     consume_pending, evaluate_alert, remove_watch, start_pending, top_signals,
 )
-from reporting.exceptions import ReportWebError
-from reporting.web import find_report, validate_report_index
 from stock_papi.settings import (
     ALERT_TASK_TOKEN,
     BROADCAST_TOKEN,
@@ -132,6 +130,7 @@ from stock_papi.services.market import (
     sector_signal_item as _sector_signal_item,
     sector_signal_score,
 )
+from stock_papi.web.routes.reports import register_report_routes
 
 
 def redact_secrets(text: str, extra_secrets: list[str] | None = None) -> str:
@@ -2152,71 +2151,16 @@ def watchlist_page():
     return redirect("/dashboard", code=302)
 
 
-@app.route("/reports")
-def reports_page():
-    try:
-        reports = _published_report_index()
-    except ReportWebError:
-        reports = None
-    return render_template("reports.html", reports=reports or [], unavailable=reports is None)
-
-
-def _report_pdf_response(report_date, disposition):
-    try:
-        parsed = datetime.date.fromisoformat(report_date)
-    except ValueError:
-        abort(404)
-    if parsed.isoformat() != report_date:
-        abort(404)
-    try:
-        reports = _published_report_index()
-    except ReportWebError:
-        return "報告服務暫時無法使用", 503
-    if reports is None:
-        return "報告服務暫時無法使用", 503
-    item = find_report(reports, report_date)
-    if item is None:
-        abort(404)
-    content = load_report_pdf(item, load_object=_gcs_get_report_object)
-    if content is None:
-        return "報告檔案暫時無法使用", 503
-    filename = f"stock-papi-tw-industry-daily-{report_date}.pdf"
-    response = Response(content, mimetype="application/pdf")
-    response.headers["Content-Disposition"] = f'{disposition}; filename="{filename}"'
-    response.headers["ETag"] = f'"{item["pdf_sha256"]}"'
-    response.headers["Cache-Control"] = "public, max-age=3600, immutable"
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    return response
-
-
-def _sample_report_response():
-    try:
-        with open(SAMPLE_REPORT_PATH, "rb") as stream:
-            content = stream.read(REPORT_PDF_MAX_BYTES + 1)
-    except OSError:
-        return "SAMPLE 報告暫時無法使用", 503
-    if not content.startswith(b"%PDF") or len(content) > REPORT_PDF_MAX_BYTES:
-        return "SAMPLE 報告暫時無法使用", 503
-    response = Response(content, mimetype="application/pdf")
-    response.headers["Content-Disposition"] = f'attachment; filename="{SAMPLE_REPORT_FILENAME}"'
-    response.headers["Cache-Control"] = "public, max-age=3600, immutable"
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    return response
-
-
-@app.route("/reports/<report_date>/preview")
-def report_preview(report_date):
-    return _report_pdf_response(report_date, "inline")
-
-
-@app.route("/reports/<report_date>/download")
-def report_download(report_date):
-    return _report_pdf_response(report_date, "attachment")
-
-
-@app.route("/reports/sample/download")
-def sample_report_download():
-    return _sample_report_response()
+register_report_routes(
+    app,
+    load_index=lambda: _published_report_index(),
+    load_pdf=lambda item: load_report_pdf(
+        item, load_object=_gcs_get_report_object
+    ),
+    sample_report_path=SAMPLE_REPORT_PATH,
+    sample_report_filename=SAMPLE_REPORT_FILENAME,
+    max_pdf_bytes=REPORT_PDF_MAX_BYTES,
+)
 
 
 @app.route("/api/dashboard")
