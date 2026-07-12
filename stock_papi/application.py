@@ -86,6 +86,7 @@ from stock_papi.integrations.line.flex import (
     build_watchlist_flex,
     build_welcome_flex,
 )
+from stock_papi.repositories.gcs import get_allowed_object
 
 
 def redact_secrets(text: str, extra_secrets: list[str] | None = None) -> str:
@@ -459,42 +460,15 @@ def get_gcp_access_token():
 
 
 def _gcs_get_allowed_object(object_name, max_bytes, allowed_prefix):
-    if (
-        not QUANT_SNAPSHOT_BUCKET
-        or line_store is None
-        or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]", QUANT_SNAPSHOT_BUCKET)
-        or not isinstance(object_name, str)
-        or not object_name.startswith(allowed_prefix)
-        or type(max_bytes) is not int
-        or max_bytes < 1
-    ):
-        return None
-    response = None
-    try:
-        token = get_gcp_access_token()
-        response = requests.get(
-            "https://storage.googleapis.com/storage/v1/b/"
-            f"{QUANT_SNAPSHOT_BUCKET}/o/{urllib.parse.quote(object_name, safe='')}?alt=media",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=5,
-            stream=True,
-        )
-        if response.status_code != 200:
-            return None
-        content_length = response.headers.get("Content-Length")
-        if content_length is not None and int(content_length) > max_bytes:
-            return None
-        content = bytearray()
-        for chunk in response.iter_content(chunk_size=64 * 1024):
-            content.extend(chunk)
-            if len(content) > max_bytes:
-                return None
-        return bytes(content) if content else None
-    except Exception:
-        return None
-    finally:
-        if response is not None:
-            response.close()
+    return get_allowed_object(
+        object_name,
+        max_bytes,
+        allowed_prefix,
+        bucket=QUANT_SNAPSHOT_BUCKET,
+        enabled=line_store is not None,
+        token_provider=get_gcp_access_token,
+        http_get=requests.get,
+    )
 
 
 def _gcs_get_object(object_name, max_bytes):
