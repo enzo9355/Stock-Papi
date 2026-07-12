@@ -100,6 +100,7 @@ from stock_papi.repositories.quant_snapshots import (
     fetch_quant_snapshot,
     published_quant_manifest,
 )
+from stock_papi.repositories.report_store import load_report_index, load_report_pdf
 from stock_papi.quant.projection import (
     _annualized_percent,
     calculate_investment_projection,
@@ -505,10 +506,10 @@ def _gcs_get_report_object(object_name, max_bytes):
 
 
 def _published_report_index():
-    content = _gcs_get_report_object("reports/v1/index-TW.json", REPORT_INDEX_MAX_BYTES)
-    if content is None:
-        return None
-    return validate_report_index(content)
+    return load_report_index(
+        load_object=_gcs_get_report_object,
+        max_bytes=REPORT_INDEX_MAX_BYTES,
+    )
 
 
 def _published_quant_manifest(market, today=None):
@@ -2476,12 +2477,8 @@ def _report_pdf_response(report_date, disposition):
     item = find_report(reports, report_date)
     if item is None:
         abort(404)
-    content = _gcs_get_report_object(f"reports/v1/{item['pdf_path']}", item["pdf_size"])
-    if (
-        content is None
-        or len(content) != item["pdf_size"]
-        or not hmac.compare_digest(hashlib.sha256(content).hexdigest(), item["pdf_sha256"])
-    ):
+    content = load_report_pdf(item, load_object=_gcs_get_report_object)
+    if content is None:
         return "報告檔案暫時無法使用", 503
     filename = f"stock-papi-tw-industry-daily-{report_date}.pdf"
     response = Response(content, mimetype="application/pdf")
