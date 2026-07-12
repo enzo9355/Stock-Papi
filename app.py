@@ -40,6 +40,32 @@ from line_state import (
 )
 from reporting.exceptions import ReportWebError
 from reporting.web import find_report, validate_report_index
+from stock_papi.settings import (
+    ALERT_TASK_TOKEN,
+    BROADCAST_TOKEN,
+    FINMIND_PASSWORD,
+    FINMIND_USER,
+    GCP_PROJECT_ID,
+    GEMINI_API_KEY,
+    LINE_CHANNEL_ACCESS_TOKEN,
+    LINE_CHANNEL_SECRET,
+    LINE_STATE_READ_BUDGET_SECONDS,
+    LINE_STATE_READ_MAX_WORKERS,
+    LOCAL_HOST,
+    MARKETAUX_API_TOKEN,
+    OPENALICE_API_TOKEN,
+    OPENALICE_API_URL,
+    QUANT_SNAPSHOT_BUCKET,
+    REPORT_INDEX_MAX_BYTES,
+    REPORT_PDF_MAX_BYTES,
+    SENTIMENT_WINDOW_DAYS,
+    SUPABASE_KEY,
+    SUPABASE_URL,
+)
+from stock_papi.shared.formatting import clamp as _clamp
+from stock_papi.shared.formatting import safe_float as _safe_float
+from stock_papi.shared.validation import is_crypto_query as _is_crypto_query
+from stock_papi.shared.validation import is_us_ticker
 
 
 def redact_secrets(text: str, extra_secrets: list[str] | None = None) -> str:
@@ -177,27 +203,7 @@ np = _LazyModule("numpy")
 # ==================================================
 # 1. 基本設定與系統快取
 # ==================================================
-LINE_CHANNEL_ACCESS_TOKEN = (os.getenv("LINE_CHANNEL_ACCESS_TOKEN") or "").strip()
-LINE_CHANNEL_SECRET = (os.getenv("LINE_CHANNEL_SECRET") or "").strip()
-FINMIND_USER = (os.getenv("FINMIND_USER") or "").strip()
-FINMIND_PASSWORD = (os.getenv("FINMIND_PASSWORD") or "").strip()
-GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
-GCP_PROJECT_ID = (os.getenv("GCP_PROJECT_ID") or "").strip()
-LOCAL_HOST = (os.getenv("HOST") or "127.0.0.1").strip()
-BROADCAST_TOKEN = (os.getenv("BROADCAST_TOKEN") or "").strip()
-ALERT_TASK_TOKEN = (os.getenv("ALERT_TASK_TOKEN") or "").strip()
-OPENALICE_API_URL = (os.getenv("OPENALICE_API_URL") or "").strip()
-OPENALICE_API_TOKEN = (os.getenv("OPENALICE_API_TOKEN") or "").strip()
-MARKETAUX_API_TOKEN = (os.getenv("MARKETAUX_API_TOKEN") or "").strip()
-QUANT_SNAPSHOT_BUCKET = (os.getenv("QUANT_SNAPSHOT_BUCKET") or "").strip()
-SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip()
-SUPABASE_KEY = (os.getenv("SUPABASE_KEY") or "").strip()
 finmind_token = None
-SENTIMENT_WINDOW_DAYS = 30
-REPORT_PDF_MAX_BYTES = 15 * 1024 * 1024
-REPORT_INDEX_MAX_BYTES = 1024 * 1024
-LINE_STATE_READ_BUDGET_SECONDS = 0.25
-LINE_STATE_READ_MAX_WORKERS = 4
 _line_state_read_slots = threading.BoundedSemaphore(LINE_STATE_READ_MAX_WORKERS)
 
 app = Flask(__name__)
@@ -407,15 +413,6 @@ def fetch_option_context_history(start_date, end_date=None):
                 logger.warning("選擇權市場指標讀取失敗 (%s): %s", symbol, exc)
                 frames[symbol] = pd.DataFrame()
     return tuple(frames[symbol] for symbol in symbols)
-
-
-def is_us_ticker(value):
-    value = str(value or "").upper()
-    return (
-        value != "TAIEX"
-        and len(value) <= 10
-        and bool(re.fullmatch(r"[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)?", value))
-    )
 
 
 def get_stock_name(code):
@@ -2074,26 +2071,6 @@ def render_web(d):
 # ==================================================
 # 6. 動態產業分類與選單生成
 # ==================================================
-def _safe_float(value, default=0.0):
-    try:
-        value = float(value)
-        return value if np.isfinite(value) else default
-    except (TypeError, ValueError):
-        return default
-
-
-def _clamp(value, low, high):
-    return max(low, min(high, value))
-
-
-def _is_crypto_query(text):
-    normalized = text.upper()
-    return any(
-        keyword in normalized
-        for keyword in ("BTC", "ETH", "USDT", "USDC", "CRYPTO", "虛擬貨幣", "虛擬幣", "加密貨幣", "比特幣", "以太幣")
-    )
-
-
 def call_openalice(prompt):
     response = requests.post(
         OPENALICE_API_URL,
