@@ -18,6 +18,7 @@ COMPATIBILITY_EXPORTS = (
     "build_line_navigation_flex",
     "handle_message",
     "handle_postback",
+    "run_alert_checks",
 )
 
 
