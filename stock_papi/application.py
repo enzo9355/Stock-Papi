@@ -589,11 +589,14 @@ def fetch_published_quant_snapshot(code, today=None):
         path = str(entry["path"])
         digest = str(entry["sha256"])
         size = entry["size"]
+        uncompressed_size = entry["uncompressed_size"]
         if (
             re.fullmatch(r"objects/[0-9a-f]{64}\.json\.gz", path) is None
             or re.fullmatch(r"[0-9a-f]{64}", digest) is None
             or type(size) is not int
             or not 0 < size <= MAX_QUANT_ARTIFACT_COMPRESSED_BYTES
+            or type(uncompressed_size) is not int
+            or not 0 < uncompressed_size <= MAX_QUANT_ARTIFACT_UNCOMPRESSED_BYTES
             or entry.get("as_of") != manifest.get("market_as_of")
         ):
             return None
@@ -606,7 +609,7 @@ def fetch_published_quant_snapshot(code, today=None):
             return None
         with gzip.GzipFile(fileobj=io.BytesIO(compressed), mode="rb") as stream:
             decoded = stream.read(MAX_QUANT_ARTIFACT_UNCOMPRESSED_BYTES + 1)
-        if len(decoded) > MAX_QUANT_ARTIFACT_UNCOMPRESSED_BYTES:
+        if len(decoded) != uncompressed_size:
             return None
         document = json.loads(decoded.decode("utf-8"))
         if (
