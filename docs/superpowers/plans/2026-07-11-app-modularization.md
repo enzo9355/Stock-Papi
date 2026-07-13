@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python 3.12 runtime（程式碼維持 Python 3.10 相容）、Flask、LINE SDK、unittest、stdlib、Node syntax check。
 
+> 下列 checkbox 保留原始執行計畫與當時先後順序；最終落地狀態以文件末尾的 Completion record、Git commits 與驗證輸出為準。
+
 ## Global Constraints
 
 - 不改 route URL、endpoint name、methods、HTTP status、JSON／template context、LINE 文案／Flex、cache semantics、GCS path／schema、模型數值或 publication 行為。
@@ -174,10 +176,10 @@
 - `create_app(config: Mapping[str, Any] | None = None) -> Flask`.
 - `app.py` ends with `app = create_app()` plus documented explicit compatibility exports.
 
-- [ ] Write failing two-app isolation, route inventory and root-import compatibility tests.
-- [ ] Verify a second app cannot share mutable cache, store or handler state unintentionally.
-- [x] Add a minimal factory and preserve existing registration; per-app runtime／registration isolation remains pending.
-- [ ] Run every required check plus `/health`, valid webhook and `/stock/2330` local smoke tests; commit `refactor: introduce lightweight app factory`.
+- [x] Write two-app isolation, route inventory and root-import compatibility tests.
+- [x] Verify config and Flask route state are independent; retain documented process-level caches intentionally.
+- [x] Add an independent factory and central route registration.
+- [ ] Run final required checks plus `/health`, valid webhook and `/stock/2330` local smoke tests.
 
 ### Task 9: Documentation, review and handoff
 
@@ -186,6 +188,13 @@
 - Modify: `docs/superpowers/specs/2026-07-11-app-modularization-design.md`
 - Modify: `docs/superpowers/plans/2026-07-11-app-modularization.md`
 
-- [ ] Update module map, entry point, route registration, test commands, compatibility layer and heavy-import rules.
-- [ ] Run full verification, inspect `git diff --check`, and execute `agy` in a clean temporary review directory using only the diff, relevant snippets and test summary.
+- [x] Update module map, entry point, route registration, test commands, compatibility layer and heavy-import rules.
+- [x] Keep `local_quant.py` unchanged and document its future pipeline boundaries separately from this refactor.
+- [ ] Run final full verification and `git diff --check`. External review is intentionally omitted because the user explicitly disabled sub-agents and external reviewers for this task.
 - [ ] Commit final documentation only after all code phases are independently committed.
+
+## Completion record
+
+- Completed commits cover shared helpers, LINE Flex, report/GCS repositories, news/sentiment, dashboard/market/stock routes and services, stock analysis, quant core, LINE webhook/handlers, independent Flask factory, legacy HTML renderer, logging helpers and central route registration.
+- Compatibility is deliberate: root `app.py` aliases `stock_papi.application` so existing `patch.object(stock_app, ...)` tests continue to affect the dynamic dependency callbacks used by routes and handlers.
+- Per-app Flask state is isolated. Existing process-level caches remain canonical singletons because changing cache ownership or TTL in the same refactor would alter behavior.

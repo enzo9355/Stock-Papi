@@ -5,7 +5,7 @@
 - `app.py`：4,153 行；同時承擔 Flask、LINE、量化、GCS、新聞、情緒、Flex、報告與 Web route。
 - Flask route：19 條非 static URL rule；既有 endpoint 名稱、method 與 `Gunicorn app:app` 均是公開契約。
 - 既有測試直接 `import app as stock_app`，並 patch module global、cache、HTTP client 與 handler；相容門面不能一次移除。
-- 2026-07-12 現況：345/345 `unittest` 通過，`py_compile`、`node --check static/app.js`、`git diff --check` 通過；`import app` 未載入 pandas、numpy、sklearn、lightgbm、matplotlib、reportlab、pypdf 或 google.generativeai。
+- 搬移前基線：345/345 `unittest` 通過；後續新增測試使目前 suite 為 357 項。
 - 基線的同步 ADC／Firestore token 預熱已在 app factory 階段移除；本機 `import app` 由約 12.5 秒降至約 0.5 秒。
 
 ## 目標
@@ -112,8 +112,16 @@ shared
 - 任一 phase failure 只修正該 phase；不繼續堆疊搬移。
 - 每次 commit 是可單獨 revert 的語意單位；不含 generated PDF、font、snapshot 或全 repo formatting。
 
-## 2026-07-12 實作狀態
+## 2026-07-13 完成狀態
 
-- 已完成：route／compatibility baseline、shared settings／validation、17 個純 Flex builders、薄 root entry、app factory、import-time credential I/O 移除。
-- 過渡層：`stock_papi/application.py` 仍集中 reports、GCS／snapshots、dashboard、news／sentiment、stock analysis、quant、LINE handlers 與 route decorators；後續 phase 必須繼續逐區搬移，不能把目前狀態誤稱為完整責任分離。
-- 已知安全缺口：publisher 已提供 quant `uncompressed_size`，現行 Cloud reader 尚未驗證；需先用獨立 fail-closed commit 修正，再做 repository 純搬移。
+- 根目錄 `app.py` 由 4,153 行降為 17 行，保留 Gunicorn `app:app` 與 module-identity compatibility facade。
+- routes 已移至 `web/routes/`，並由 `web/route_registration.py` 集中註冊；inventory 為 20 條公開 rule，URL、endpoint 與 methods 均由 regression test 固定。
+- reports、GCS、quant snapshots、market insights、news、sentiment、market、dashboard、stock analysis 與 quant 核心已有各自 repository／integration／service／quant 邊界。
+- LINE Flex、notifications、webhook routes、message 與 postback handlers 已移出 compatibility module；handler 透過明確 dependency mapping 協調舊 patch points。
+- `create_app()` 每次建立新的 Flask instance，config 與 URL map 不共用；process-level data caches 仍刻意共享，以保留既有 TTL 與 fallback semantics。
+- `application.py` 保留舊測試仍 patch 的 compatibility exports、LINE/store clients、provider wrappers與 Papi prompt orchestration。這是明確過渡邊界；新 production code 不得再往內新增責任。
+- quant `uncompressed_size`、SHA-256、compressed size、path allowlist 與 schema 驗證均保留在 repository fail-closed 路徑。
+
+## `local_quant.py` 後續設計
+
+本次不拆 `local_quant.py`。下一輪應獨立規劃 `local_pipeline/cli.py`、`runner.py`、`checkpoint.py`、`artifacts.py`、`manifest.py`、`publisher.py`、`retention.py` 與 `status.py`。拆分順序應從純 artifact／manifest schema 開始，再搬 checkpoint 與 publisher；每一步固定 immutable object、atomic latest、排程時間、失敗保留上一版與刪除路徑限制，不與模型公式修改同時進行。
