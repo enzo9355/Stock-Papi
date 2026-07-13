@@ -34,6 +34,28 @@ def analysis_data():
             "trades": 7, "mdd": -6.0, "sharpe": 1.1,
             "conclusion": "風險調整後表現尚可", "top_features": ["成交量", "RSI", "法人"],
         },
+        "recommendation": {
+            "action": "分批布局", "level": "cautious_bullish",
+            "headline": "模型與趨勢偏多，但短線不宜追高",
+            "confidence": "可信度有限",
+            "supporting_reasons": ["五日上漲機率 63%", "站上 MA20"],
+            "risk_reasons": ["相似歷史訊號少於 12 次"],
+            "suggested_action": "等待拉回後分二至三次建立部位。",
+            "invalidation_conditions": ["股價跌破 MA20"],
+            "unheld_guidance": "等待拉回後分批建立部位",
+            "held_guidance": "可續抱但不宜明顯加碼",
+            "data_as_of": "2026-07-03",
+            "source_metrics": {"sample_count": 7},
+        },
+        "backtest_interpretation": {
+            "advantage": "過去相同規則的結果優於單純買進持有，但不代表未來仍會維持。",
+            "cumulative_return": "投入 10 萬元，歷史結果約變成 10.8 萬元。",
+            "maximum_drawdown": "最差階段，10 萬元可能一度剩下約 9.4 萬元。",
+            "win_rate": "每 100 次進場約有 57 次獲利；勝率不代表每次盈虧相同。",
+            "cash_ratio": "資料不足：目前無法判斷空手比例。",
+            "sharpe": "報酬效率（Sharpe Ratio）為 1.10，用來比較承擔波動後的歷史報酬。",
+            "brier": "機率可信度（Brier Score）為 0.230；它檢查模型說 60% 時，歷史實際上漲率是否接近 60%。",
+        },
     }
 
 
@@ -212,6 +234,14 @@ class WebProductTests(unittest.TestCase):
             "s_status": "偏多",
             "s_score": 63.0,
             "news_confidence": "中",
+            "recommendation": {
+                "action": "控制追價", "level": "neutral",
+                "headline": "市場訊號尚未形成一致優勢",
+                "confidence": "可信度中等",
+                "supporting_reasons": ["五日上漲機率 58%", "站上 MA20"],
+                "risk_reasons": ["量能不足"],
+                "data_as_of": "2026-07-03",
+            },
         }
         load_snapshot.return_value = {
             "sectors": {
@@ -242,6 +272,7 @@ class WebProductTests(unittest.TestCase):
         self.assertEqual(payload["market"]["price"], 23150.0)
         self.assertEqual(payload["market"]["as_of"], "2026-07-03")
         self.assertEqual(payload["market"]["sentiment_status"], "偏多")
+        self.assertEqual(payload["market"]["recommendation"]["action"], "控制追價")
         self.assertEqual([item["code"] for item in payload["opportunities"]], ["2330", "2317"])
         self.assertEqual(payload["sector_cards"][0]["name"], "半導體")
         self.assertEqual(payload["sector_cards"][0]["leader"]["code"], "2330")
@@ -270,6 +301,18 @@ class WebProductTests(unittest.TestCase):
         self.assertIn("產業同儕", html)
         self.assertIn("聯發科", html)
         self.assertIn('aria-label="個股分析導覽"', html)
+        self.assertIn("分批布局", html)
+        self.assertIn("支持這項建議", html)
+        self.assertIn("反對這項建議", html)
+        self.assertIn("未持有", html)
+        self.assertIn("已持有", html)
+        self.assertIn("投入 10 萬元，歷史結果約變成 10.8 萬元", html)
+        self.assertIn("查看模型與回測詳細數據", html)
+
+    def test_dashboard_script_does_not_insert_api_text_with_inner_html(self):
+        script = Path(stock_app.app.static_folder, "app.js").read_text(encoding="utf-8")
+
+        self.assertNotIn(".innerHTML", script)
 
     @patch.object(stock_app, "analyze", return_value=analysis_data())
     def test_stock_page_accepts_standard_us_ticker(self, analyze):

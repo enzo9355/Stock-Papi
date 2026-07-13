@@ -1,5 +1,6 @@
 """Stock analysis orchestration without Flask or LINE dependencies."""
 
+from reporting.interpretation import interpret_backtest
 from stock_papi.services.recommendation_engine import recommend_analysis
 
 
@@ -104,6 +105,7 @@ def analyze_uncached(
     }
     result["projection"] = calculate_projection(100000, result)
     result["recommendation"] = recommend_analysis(result).to_dict()
+    result["backtest_interpretation"] = interpret_backtest(backtest)
     return result
 
 

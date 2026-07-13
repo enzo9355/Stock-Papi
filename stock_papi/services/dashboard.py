@@ -1,3 +1,9 @@
+import datetime
+
+from stock_papi.services.recommendation_engine import (
+    RecommendationInput,
+    build_recommendation,
+)
 from stock_papi.shared.formatting import clamp as _clamp
 from stock_papi.shared.formatting import safe_float as _safe_float
 
@@ -9,8 +15,9 @@ def dashboard_top_picks(cards, limit=3):
         picks.append({
             "code": leader["code"],
             "name": leader["name"],
-            "headline": f"{card['name']}優先觀察",
-            "summary": f"AI 勝率 {leader['prob']}%・{leader['trend']}・外資5日 {leader['foreign_net_5']:,}",
+            "headline": leader["recommendation"]["headline"],
+            "summary": f"五日上漲機率 {leader['prob']}%・{leader['trend']}・外資5日 {leader['foreign_net_5']:,}",
+            "recommendation": leader["recommendation"],
         })
     return picks
 
@@ -55,6 +62,24 @@ def dashboard_sector_cards(load_snapshot, line_store, fallback_items, safe_float
         if not items:
             continue
         leader = items[0]
+        try:
+            as_of = datetime.date.fromisoformat(str(leader.get("as_of") or ""))
+        except ValueError:
+            as_of = None
+        recommendation = build_recommendation(RecommendationInput(
+            scope="industry",
+            entity_id=str(name),
+            probability=leader.get("prob"),
+            trend=leader.get("trend"),
+            data_as_of=as_of,
+            current_date=datetime.date.today(),
+            foreign_net_5=leader.get("foreign_net_5"),
+            sample_count=leader.get("sample_count", leader.get("trades")),
+            industry_coverage=leader.get("coverage"),
+            rotation=leader.get("rotation"),
+            near_rotation_boundary=leader.get("near_rotation_boundary") is True,
+            data_quality_warning=leader.get("data_quality_warning") is True,
+        )).to_dict()
         cards.append({
             "name": name,
             "count": len(items),
@@ -66,6 +91,7 @@ def dashboard_sector_cards(load_snapshot, line_store, fallback_items, safe_float
                 "trend": str(leader.get("trend") or "中性"),
                 "foreign_net_5": int(safe_float(leader.get("foreign_net_5"))),
                 "as_of": str(leader.get("as_of") or ""),
+                "recommendation": recommendation,
             },
         })
     if cards:
@@ -83,6 +109,10 @@ def dashboard_sector_cards(load_snapshot, line_store, fallback_items, safe_float
                 "trend": "等待更新",
                 "foreign_net_5": 0,
                 "as_of": "",
+                "recommendation": build_recommendation(RecommendationInput(
+                    scope="industry", entity_id="熱門觀察",
+                    probability=item["prob"], trend="等待更新",
+                )).to_dict(),
             },
         })
     return fallback
