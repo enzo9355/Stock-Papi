@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}我的帳戶｜Stock Papi{% endblock %}
+{% block content %}
+<div class="page account-page">
+  <header class="page-header"><div><p class="eyebrow">LINE ACCOUNT</p><h1>我的帳戶</h1><p class="muted">網站與 LINE Bot 使用同一個 LINE user ID，共用關注與提醒。</p></div></header>
+  <section class="panel account-profile">
+    {% if user.picture_url %}<img src="{{ user.picture_url }}" alt="{{ user.display_name }} 的 LINE 頭像" referrerpolicy="no-referrer">{% endif %}
+    <div><p class="eyebrow">已連結 LINE</p><h2>{{ user.display_name or 'LINE 使用者' }}</h2><p class="muted">方案：免費版</p></div>
+  </section>
+  <div class="account-action-grid">
+    <a class="panel" href="{{ url_for('account_watchlist_page') }}"><strong>我的關注</strong><span>{{ state.watchlist|length }} 檔股票</span></a>
+    <section class="panel"><strong>提醒設定</strong><span>{{ state.alerts|length }} 個提醒；目前仍由 LINE 完成細部設定。</span></section>
+  </div>
+  <form action="{{ url_for('auth_logout') }}" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-secondary" type="submit">登出</button></form>
+</div>
+{% endblock %}

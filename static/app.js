@@ -1,5 +1,34 @@
 const bySelector = (selector, root = document) => root.querySelector(selector);
 
+function element(tag, className, text) {
+  const item = document.createElement(tag);
+  if (className) item.className = className;
+  if (text !== undefined && text !== null) item.textContent = String(text);
+  return item;
+}
+
+function replaceContent(container, items) {
+  container.replaceChildren(...items);
+}
+
+function emptyState(message) {
+  return element("div", "empty-state", message);
+}
+
+function stockHref(code, fallback = "/dashboard") {
+  const normalized = String(code || "").toUpperCase();
+  return /^[A-Z0-9.-]{1,16}$/.test(normalized)
+    ? `/stock/${encodeURIComponent(normalized)}`
+    : fallback;
+}
+
+function card(tag, className, rows, href) {
+  const item = element(tag, className);
+  if (href) item.setAttribute("href", href);
+  rows.forEach(([rowTag, rowClass, value]) => item.append(element(rowTag, rowClass, value)));
+  return item;
+}
+
 async function loadDashboard() {
   const page = bySelector("[data-dashboard-endpoint]");
   if (!page) return;
@@ -14,63 +43,166 @@ async function loadDashboard() {
 }
 
 function renderDashboard(data) {
+  const marketData = data.market || {};
+  const marketRecommendation = marketData.recommendation || {};
+  const hero = bySelector("[data-market-hero]");
+  if (hero) {
+    const label = element("p", `action-label action-${marketRecommendation.level || "insufficient"}`, marketRecommendation.action || "等待資料");
+    const headline = element("h1", "market-headline", marketRecommendation.headline || "市場建議資料暫時不足");
+    const reasons = element("ul", "hero-reasons");
+    (marketRecommendation.supporting_reasons || []).slice(0, 3).forEach((reason) => reasons.append(element("li", "", reason)));
+    if (!reasons.children.length) reasons.append(element("li", "", "等待完整市場資料更新"));
+    const risk = element("p", "hero-risk");
+    risk.append(element("strong", "", "最大風險："));
+    risk.append(document.createTextNode((marketRecommendation.risk_reasons || ["資料品質不足"])[0]));
+    const meta = element("p", "muted small", `資料日 ${marketData.as_of || "待更新"} · ${marketRecommendation.confidence || "可信度低"}`);
+    replaceContent(hero, [label, headline, reasons, risk, meta]);
+  }
+
   const market = bySelector("[data-market-summary]");
   if (market) {
-    market.innerHTML = `
-      <article class="pulse-card"><span>加權指數</span><strong>${data.market.price.toFixed(2)}</strong><small class="muted">資料日 ${data.market.as_of || "待更新"}</small></article>
-      <article class="pulse-card"><span>五日上漲機率</span><strong>${data.market.prob}%</strong><small class="muted">模型方向機率，情緒可信度${data.market.confidence || "低"}</small></article>
-      <article class="pulse-card"><span>市場判讀</span><strong>${data.market.trend}</strong><small class="muted">情緒 ${data.market.sentiment_status || "資料不足"}，再搭配產業預測</small></article>`;
+    replaceContent(market, [
+      card("article", "pulse-card", [["span", "", "市場行動"], ["strong", "", marketRecommendation.action || "等待資料"], ["small", "muted", marketRecommendation.headline || "市場建議資料不足"]]),
+      card("article", "pulse-card", [["span", "", "優先方向"], ["strong", "", (data.sector_cards || [])[0]?.name || "等待資料"], ["small", "muted", "先看產業，再評估個股"]]),
+      card("article", "pulse-card", [["span", "", "最大風險"], ["strong", "", (marketRecommendation.risk_reasons || ["資料品質不足"])[0]], ["small", "muted", `加權指數 ${Number(marketData.price || 0).toFixed(2)}`]]),
+    ]);
   }
   const status = bySelector(".status-dot");
-  if (status) status.textContent = data.market.as_of ? `資料日 ${data.market.as_of}` : "已更新";
+  if (status) status.textContent = marketData.as_of ? `資料日 ${marketData.as_of}` : "已更新";
 
   const watchlist = bySelector("[data-watchlist-strip]");
   if (watchlist) {
     const hint = data.watchlist_hint || { title: "", steps: [] };
-    watchlist.innerHTML = (hint.steps || []).map((step, index) =>
-      `<article class="watch-chip"><span>Step ${index + 1}</span><strong>${step}</strong></article>`
-    ).join("");
+    replaceContent(watchlist, (hint.steps || []).map((step, index) =>
+      card("article", "watch-chip", [["span", "", `Step ${index + 1}`], ["strong", "", step]])
+    ));
   }
 
   const focus = bySelector("[data-daily-focus]");
   if (focus) {
     const items = data.top_picks || [];
-    focus.innerHTML = items.length ? items.slice(0, 2).map((item) => `
-      <a class="focus-card" href="/stock/${item.code}">
-        <span>${item.headline}</span><strong>${item.name}</strong><small>${item.summary}</small>
-      </a>`).join("") : '<div class="empty-state">今日焦點等待產業快照更新。</div>';
+    replaceContent(focus, items.length ? items.slice(0, 2).map((item) =>
+      card("a", "focus-card", [["span", "", item.recommendation?.action || "等待確認"], ["strong", "", item.name], ["small", "", item.headline], ["small", "", item.summary]], stockHref(item.code))
+    ) : [emptyState("今日焦點等待產業快照更新。")]);
   }
 
   const heatmap = bySelector("[data-market-heatmap]");
   if (heatmap) {
     const cells = data.heatmap || [];
-    heatmap.innerHTML = cells.length ? cells.map((item) => `
-      <a class="heatmap-cell ${item.tone}" href="${item.code ? `/stock/${item.code}` : '#industry-forecast'}">
-        <span>${item.name}</span><strong>${item.probability}%</strong><small>${item.count} 檔候選</small>
-      </a>`).join("") : '<div class="empty-state">熱力圖等待產業快照更新。</div>';
+    replaceContent(heatmap, cells.length ? cells.map((item) =>
+      card("a", `heatmap-cell ${["hot", "cold", "steady"].includes(item.tone) ? item.tone : "steady"}`, [["span", "", item.name], ["strong", "", `${item.probability}%`], ["small", "", `${item.count} 檔候選`]], item.code ? stockHref(item.code, "#industry-forecast") : "#industry-forecast")
+    ) : [emptyState("熱力圖等待產業快照更新。")]);
   }
 
   const forecasts = bySelector("[data-sector-grid]");
   if (forecasts) {
     const cards = data.sector_cards || [];
-    forecasts.innerHTML = cards.length ? cards.map((card, index) => `
-      <a class="forecast-card" href="${card.leader.code ? `/stock/${card.leader.code}` : '/dashboard'}">
-        <span>第 ${index + 1} 名・${card.name}</span>
-        <strong>${card.leader.name || "等待更新"}</strong>
-        <small>AI 勝率 ${card.leader.prob}%・${card.leader.trend}</small>
-        <small>外資5日 ${Number(card.leader.foreign_net_5 || 0).toLocaleString("zh-TW")}・${card.leader.as_of || "快照待更新"}</small>
-      </a>`).join("") : '<div class="empty-state">產業預測快照尚未準備好，請稍後再試。</div>';
+    replaceContent(forecasts, cards.length ? cards.map((sector, index) => {
+      const recommendation = sector.leader.recommendation || {};
+      return card("a", "forecast-card", [
+        ["span", "", `第 ${index + 1} 名 · ${sector.name}`],
+        ["strong", "", recommendation.action || "等待確認"],
+        ["small", "", `五日上漲機率 ${sector.leader.prob}% · ${sector.leader.trend}`],
+        ["small", "", recommendation.headline || "等待完整資料"],
+        ["small", "", `代表股票 ${sector.leader.name || "待更新"} · ${recommendation.confidence || "可信度低"}`],
+      ], stockHref(sector.leader.code));
+    }) : [emptyState("產業預測快照尚未準備好，請稍後再試。")]);
   }
 
   const picks = bySelector("[data-top-picks]");
   if (picks) {
     const items = data.top_picks || [];
-    picks.innerHTML = items.length ? items.map((item) => `
-      <a class="pick-card" href="/stock/${item.code}">
-        <strong>${item.name}</strong>
-        <p>${item.headline}</p>
-        <p>${item.summary}</p>
-      </a>`).join("") : '<div class="empty-state">目前沒有足夠的精選標的資料。</div>';
+    replaceContent(picks, items.length ? items.map((item) => {
+      const recommendation = item.recommendation || {};
+      return card("a", "pick-card", [
+        ["span", "", `${item.name} · ${item.code}`],
+        ["strong", "", recommendation.action || "等待確認"],
+        ["p", "", item.headline],
+        ["p", "", item.summary],
+        ["small", "", `主要風險：${(recommendation.risk_reasons || ["資料不足"])[0]}`],
+      ], stockHref(item.code));
+    }) : [emptyState("目前沒有足夠的精選標的資料。")]);
+  }
+}
+
+function loginLocation() {
+  const returnTo = `${window.location.pathname}${window.location.search}`;
+  return `/auth/line/login?return_to=${encodeURIComponent(returnTo)}`;
+}
+
+function updateAccountInterface(data) {
+  window.stockPapiAccount = data;
+  const account = bySelector("[data-account-nav]");
+  if (account) {
+    const profile = element("a", "account-profile-link");
+    profile.href = "/account";
+    if (data.user.picture_url) {
+      const picture = element("img", "account-avatar");
+      picture.src = data.user.picture_url;
+      picture.alt = "";
+      picture.referrerPolicy = "no-referrer";
+      profile.append(picture);
+    }
+    const label = element("span", "");
+    label.append(element("strong", "", data.user.display_name));
+    label.append(element("small", "", "已連結 LINE"));
+    profile.append(label);
+    const watchlist = element("a", "nav-link", `我的關注（${data.watchlist.length}）`);
+    watchlist.href = "/account/watchlist";
+    const logout = element("button", "link-button", "登出");
+    logout.type = "button";
+    logout.dataset.accountLogout = "";
+    replaceContent(account, [profile, watchlist, logout]);
+  }
+  const mobile = bySelector("[data-mobile-account]");
+  if (mobile) mobile.textContent = "我的";
+  const toggle = bySelector("[data-watchlist-toggle]");
+  if (toggle) {
+    const watched = data.watchlist.some((item) => item.code === toggle.dataset.code);
+    toggle.dataset.authenticated = "true";
+    toggle.dataset.watched = String(watched);
+    toggle.textContent = watched ? "取消關注" : "加入關注";
+    toggle.setAttribute("aria-pressed", String(watched));
+  }
+}
+
+async function loadAccountState() {
+  try {
+    const response = await fetch("/api/account/state", { headers: { Accept: "application/json" } });
+    if (!response.ok) return;
+    updateAccountInterface(await response.json());
+  } catch (_error) {
+    // 公開頁維持未登入狀態；不顯示內部錯誤。
+  }
+}
+
+async function toggleWatchlist(button) {
+  const account = window.stockPapiAccount;
+  if (!account) {
+    window.location.assign(loginLocation());
+    return;
+  }
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/account/watchlist", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-CSRF-Token": account.csrf_token,
+      },
+      body: JSON.stringify({
+        action: button.dataset.watched === "true" ? "remove" : "add",
+        code: button.dataset.code,
+      }),
+    });
+    if (!response.ok) throw new Error("watchlist");
+    account.watchlist = (await response.json()).watchlist;
+    updateAccountInterface(account);
+  } catch (_error) {
+    button.textContent = "暫時無法更新，請稍後再試";
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -141,6 +273,23 @@ function initStockChart() {
 }
 
 document.addEventListener("click", (event) => {
+  const watchlist = event.target.closest("[data-watchlist-toggle]");
+  if (watchlist) {
+    toggleWatchlist(watchlist);
+    return;
+  }
+
+  const logout = event.target.closest("[data-account-logout]");
+  if (logout && window.stockPapiAccount) {
+    fetch("/auth/logout", {
+      method: "POST",
+      headers: { "X-CSRF-Token": window.stockPapiAccount.csrf_token },
+    }).then((response) => {
+      if (response.ok || response.redirected) window.location.assign("/");
+    });
+    return;
+  }
+
   const preset = event.target.closest("[data-amount-preset]");
   if (preset) {
     const input = bySelector("[data-investment-amount]", preset.closest("[data-return-calculator]"));
@@ -180,5 +329,6 @@ document.addEventListener("click", (event) => {
 });
 
 loadDashboard();
+loadAccountState();
 initStockChart();
 initReturnCalculator();

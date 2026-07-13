@@ -139,7 +139,12 @@ from stock_papi.repositories.quant_snapshots import (
     fetch_quant_snapshot,
     published_quant_manifest,
 )
-from stock_papi.repositories.report_store import load_report_index, load_report_pdf
+from stock_papi.repositories.report_store import (
+    load_report_index,
+    load_report_metadata,
+    load_report_pdf,
+)
+from stock_papi.repositories.auth_store import FirestoreAuthStore
 from stock_papi.quant.projection import (
     _annualized_percent,
     calculate_investment_projection,
@@ -192,6 +197,7 @@ from stock_papi.services.dashboard import (
     dashboard_sector_cards as _dashboard_sector_cards,
     dashboard_top_picks,
 )
+from stock_papi.services.auth import LineLoginConfig, utc_now
 from stock_papi.services.market import (
     build_market_map as _build_market_map,
     build_sector_signal_snapshot as _build_sector_signal_snapshot,
@@ -251,6 +257,9 @@ if supabase_client:
     line_store = SupabaseStore(supabase_client)
 else:
     line_store = FirestoreStore(GCP_PROJECT_ID) if GCP_PROJECT_ID else None
+
+line_login_config = LineLoginConfig.from_env()
+line_auth_store = FirestoreAuthStore(GCP_PROJECT_ID) if GCP_PROJECT_ID else None
 
 gemini_model = _LazyGeminiModel(GEMINI_API_KEY) if GEMINI_API_KEY else None
 
@@ -892,9 +901,16 @@ def route_dependencies():
         "load_report_pdf": lambda item: load_report_pdf(
             item, load_object=_gcs_get_report_object
         ),
+        "load_report_metadata": lambda item: load_report_metadata(
+            item, load_object=_gcs_get_report_object
+        ),
         "sample_report_path": SAMPLE_REPORT_PATH,
         "sample_report_filename": SAMPLE_REPORT_FILENAME,
         "max_pdf_bytes": REPORT_PDF_MAX_BYTES,
+        "line_login_config": line_login_config,
+        "get_auth_store": lambda: line_auth_store,
+        "auth_http_post": requests.post,
+        "auth_now": utc_now,
         "analyze": lambda code: analyze(code),
         "dashboard_sector_cards": lambda: dashboard_sector_cards(),
         "cached_opportunities": lambda: cached_opportunities(),

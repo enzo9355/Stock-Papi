@@ -18,6 +18,7 @@ def redact_secrets(text: str, extra_secrets: list[str] | None = None) -> str:
         r"\1 ********",
         redacted,
     )
+    redacted = re.sub(r"\bU[0-9a-fA-F]{32}\b", "U********", redacted)
     redacted = re.sub(
         (
             r"(?i)([\"']?\b(?:access_token|refresh_token|id_token|api_token|"
@@ -68,8 +69,6 @@ class RedactingFormatter(logging.Formatter):
             if self._original_formatter
             else super().format(record_copy)
         )
-        if record.levelno < logging.WARNING:
-            return formatted
         return redact_secrets(formatted, self._get_extra_secrets())
 
     def _get_extra_secrets(self):
