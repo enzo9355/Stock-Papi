@@ -23,7 +23,8 @@ import json
 
 from market_insights import build_industries, build_supply_chains
 
-from flask import request
+# Compatibility export: legacy tests still patch app.render_template.
+from flask import render_template, request
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import (
     MessageEvent, PostbackEvent, TextMessage, TextSendMessage,
