@@ -102,6 +102,14 @@ from stock_papi.integrations.line.state import (
     _system_document_url as _line_system_document_url,
 )
 from stock_papi.integrations.market_data.tw_exchange import fetch_market_activity
+from stock_papi.integrations.market_data.provider import (
+    fetch_finmind_dataset as _provider_fetch_finmind_dataset,
+    fetch_option_context_history as _provider_fetch_option_context_history,
+    fetch_yfinance_price_history as _provider_fetch_yfinance_price_history,
+    finmind_login as _provider_finmind_login,
+    get_stock_name as _provider_get_stock_name,
+    search_stock_code as _provider_search_stock_code,
+)
 from stock_papi.integrations.news.provider import (
     fetch_marketaux_news as _fetch_marketaux_news,
     fetch_news_rss,
@@ -308,114 +316,59 @@ YFINANCE_CACHE_SECONDS = 3600
 # ==================================================
 def finmind_login():
     global finmind_token
-    if finmind_token or not FINMIND_USER or not FINMIND_PASSWORD: return
-    try:
-        r = requests.post(
-            "https://api.finmindtrade.com/api/v4/login",
-            data={"user_id": FINMIND_USER, "password": FINMIND_PASSWORD},
-            timeout=5
-        ).json()
-        if r.get("msg") == "success": finmind_token = r["token"]
-    except (requests.RequestException, KeyError, TypeError, ValueError):
-        return
+    finmind_token = _provider_finmind_login(
+        finmind_token, FINMIND_USER, FINMIND_PASSWORD, requests
+    )
 
 def fetch_finmind_dataset(dataset, code, start_date, end_date):
     global _FINMIND_BLOCKED_UNTIL
-    now = time.time()
-    if now < _FINMIND_BLOCKED_UNTIL:
-        return pd.DataFrame()
-    finmind_login()
-    params = {
-        "dataset": dataset,
-        "data_id": code,
-        "start_date": start_date,
-        "end_date": end_date,
-    }
-    if finmind_token:
-        params["token"] = finmind_token
-    try:
-        response = requests.get(
-            "https://api.finmindtrade.com/api/v4/data",
-            params=params,
-            timeout=8,
-        )
-        if response.status_code in (402, 403):
-            _FINMIND_BLOCKED_UNTIL = now + (60 if response.status_code == 402 else 30) * 60
-        response.raise_for_status()
-        return pd.DataFrame(response.json().get("data", []))
-    except (requests.RequestException, ValueError, TypeError) as exc:
-        logger.warning("FinMind %s 讀取失敗: %s", dataset, exc)
-        return pd.DataFrame()
+    frame, _FINMIND_BLOCKED_UNTIL = _provider_fetch_finmind_dataset(
+        dataset,
+        code,
+        start_date,
+        end_date,
+        blocked_until=_FINMIND_BLOCKED_UNTIL,
+        now=time.time,
+        login=finmind_login,
+        token=lambda: finmind_token,
+        requests_module=requests,
+        pd=pd,
+        logger=logger,
+    )
+    return frame
 
 
 def fetch_yfinance_price_history(tickers, start_date, end_date=None):
-    if isinstance(tickers, str):
-        tickers = [tickers]
-    cache_key = (tuple(tickers), start_date, end_date or "")
-    now = time.time()
-    cached = _YFINANCE_CACHE.get(cache_key)
-    if cached and now - cached[1] < YFINANCE_CACHE_SECONDS:
-        return cached[0].copy()
-
-    try:
-        import yfinance as yf
-
-        for ticker in tickers:
-            hist = yf.download(
-                ticker,
-                start=start_date,
-                end=end_date,
-                progress=False,
-                threads=False,
-            )
-            if isinstance(hist.columns, pd.MultiIndex):
-                hist.columns = hist.columns.droplevel(1)
-            if not hist.empty and "Close" in hist.columns:
-                frame = hist.copy()
-                frame.index = pd.to_datetime(frame.index).tz_localize(None)
-                frame.index.name = "Date"
-                frame = frame.reset_index()[["Date", "Open", "High", "Low", "Close", "Volume"]]
-                _YFINANCE_CACHE[cache_key] = (frame.copy(), now)
-                return frame
-    except Exception as exc:
-        logger.warning("Yahoo Finance 讀取失敗: %s", exc)
-    return pd.DataFrame()
+    return _provider_fetch_yfinance_price_history(
+        tickers,
+        start_date,
+        end_date,
+        cache=_YFINANCE_CACHE,
+        cache_seconds=YFINANCE_CACHE_SECONDS,
+        now=time.time,
+        pd=pd,
+        logger=logger,
+    )
 
 
 def fetch_option_context_history(start_date, end_date=None):
-    symbols = ("^VIX", "^VIX9D", "^VIX3M")
-    frames = {}
-    with ThreadPoolExecutor(max_workers=len(symbols)) as executor:
-        futures = {
-            symbol: executor.submit(
-                fetch_yfinance_price_history, symbol, start_date, end_date
-            )
-            for symbol in symbols
-        }
-        for symbol, future in futures.items():
-            try:
-                frames[symbol] = future.result()
-            except Exception as exc:
-                logger.warning("選擇權市場指標讀取失敗 (%s): %s", symbol, exc)
-                frames[symbol] = pd.DataFrame()
-    return tuple(frames[symbol] for symbol in symbols)
+    return _provider_fetch_option_context_history(
+        start_date,
+        end_date,
+        fetch_yfinance_price_history,
+        ThreadPoolExecutor,
+        pd,
+        logger,
+    )
 
 
 def get_stock_name(code):
-    if code == "TAIEX": return "台股大盤"
-    if code in twstock.codes: return twstock.codes[code].name
-    if is_us_ticker(code): return f"美股 {code}"
-    return code
+    return _provider_get_stock_name(code, twstock.codes, is_us_ticker)
 
 def search_stock_code(keyword):
-    keyword = keyword.upper().strip()
-    if not keyword: return None, None
-    if keyword in ["TAIEX", "加權指數", "台股大盤", "大盤"]: return "TAIEX", "台股大盤"
-    if keyword.isdigit(): return keyword, get_stock_name(keyword)
-    if is_us_ticker(keyword): return keyword, get_stock_name(keyword)
-    for code, info in twstock.codes.items():
-        if keyword in info.name.upper(): return code, info.name
-    return None, None
+    return _provider_search_stock_code(
+        keyword, twstock.codes, is_us_ticker, get_stock_name
+    )
 
 
 def get_gcp_access_token():
