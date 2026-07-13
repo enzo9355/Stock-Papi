@@ -202,7 +202,10 @@ from stock_papi.services.stock_analysis import (
     analyze_uncached as _analyze_uncached,
     snapshot_dataframe as _build_snapshot_dataframe,
 )
-from stock_papi.services.papi import PapiService
+from stock_papi.services.papi import (
+    PapiService,
+    get_ai_insight_for_broadcast as _get_ai_insight_for_broadcast,
+)
 from stock_papi.services.news import get_news as _get_news
 from stock_papi.services.market_insights import (
     market_insights_payload as _market_insights_payload,
@@ -540,24 +543,9 @@ def run_ai_engine(df):
     )
 
 def get_ai_insight_for_broadcast(name, data, bt, news):
-    if not gemini_model: return "未設定 API Key，無法生成觀點。"
-    n_txt = "\n".join([n['title'] for n in news])
-    prompt = f"""請以資深分析師語氣，針對{name}撰寫100字內洞見。不要廢話，直接給建議。
-最新價:{data['price']}
-五日上漲機率:{data['prob']}%
-夏普值:{bt['sharpe']:.2f}
-新聞:\n{n_txt}"""
-    try:
-        safety = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-        ]
-        response = gemini_model.generate_content(prompt, safety_settings=safety)
-        return response.text.strip() if response.text else "AI 觀點生成為空。"
-    except Exception as e:
-        return "暫時無法生成 AI 觀點，請參考量化數據。"
+    return _get_ai_insight_for_broadcast(
+        name, data, bt, news, gemini_model
+    )
 
 # ==================================================
 # 4. 分析總控
