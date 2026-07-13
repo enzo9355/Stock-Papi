@@ -191,6 +191,7 @@ from stock_papi.services.stock_analysis import (
     snapshot_dataframe as _build_snapshot_dataframe,
 )
 from stock_papi.services.papi import PapiService
+from stock_papi.services.news import get_news as _get_news
 from stock_papi.web.legacy_html import render_web
 
 
@@ -592,33 +593,17 @@ def fetch_stocktwits_sentiment(code):
 
 
 def get_news(name, code=None):
-    items = []
-    social = []
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        rss_future = executor.submit(fetch_news_rss, name)
-        marketaux_future = executor.submit(fetch_marketaux_news, name)
-        social_future = (
-            executor.submit(fetch_stocktwits_sentiment, code) if code else None
-        )
-        try:
-            items.extend(parse_news_items(rss_future.result()))
-        except Exception:
-            pass
-        try:
-            items.extend(marketaux_future.result())
-        except Exception:
-            pass
-        if social_future:
-            try:
-                social = social_future.result()
-            except Exception:
-                pass
-    news = [
-        item for item in normalize_and_dedupe(items)
-        if item.get("age_hours") is None
-        or item["age_hours"] <= SENTIMENT_WINDOW_DAYS * 24
-    ]
-    return news[:4 if social else 5] + social[:1]
+    return _get_news(
+        name,
+        code,
+        ThreadPoolExecutor,
+        fetch_news_rss,
+        parse_news_items,
+        fetch_marketaux_news,
+        fetch_stocktwits_sentiment,
+        normalize_and_dedupe,
+        SENTIMENT_WINDOW_DAYS,
+    )
 
 def calc_all(df):
     return _calc_all(df, pd=pd, np=np)
