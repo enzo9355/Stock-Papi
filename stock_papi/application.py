@@ -28,7 +28,6 @@ from flask import render_template, request
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import (
     MessageEvent, PostbackEvent, TextMessage, TextSendMessage,
-    QuickReply, QuickReplyButton, MessageAction
 )
 from line_state import (
     FirestoreStore, StateError, StoreError, add_alert, add_watch,
@@ -70,7 +69,6 @@ from stock_papi.shared.logging import (
 from stock_papi.integrations.line.flex import (
     _alert_condition_text,
     _alert_management_card,
-    _empty_line_bubble,
     _signal_card,
     _watchlist_card,
     build_alert_menu_flex,
@@ -91,6 +89,14 @@ from stock_papi.integrations.line.webhook import register_line_routes
 from stock_papi.integrations.line.handlers import (
     handle_message_impl as _line_handle_message_impl,
     handle_postback_impl as _line_handle_postback_impl,
+)
+from stock_papi.integrations.line.presentation import (
+    _build_sector_signal_row as _line_build_sector_signal_row,
+    _build_stock_row as _line_build_stock_row,
+    build_category_quick_reply as _line_build_category_quick_reply,
+    build_industry_carousel as _line_build_industry_carousel,
+    build_projection_flex as _line_build_projection_flex,
+    build_sector_signal_carousel as _line_build_sector_signal_carousel,
 )
 from stock_papi.integrations.market_data.tw_exchange import fetch_market_activity
 from stock_papi.integrations.news.provider import (
@@ -1088,14 +1094,9 @@ def find_industry_peers(code, market_map=None, limit=5):
     return _find_industry_peers(code, market_map or industry_map, limit=limit)
 
 def build_category_quick_reply(page=1):
-    cats = list(industry_map.keys())
-    total = 1 if not cats else (len(cats) + CATEGORY_PAGE_SIZE - 1) // CATEGORY_PAGE_SIZE
-    page = max(1, min(page, total))
-    start = (page - 1) * CATEGORY_PAGE_SIZE
-    items = [QuickReplyButton(action=MessageAction(label=c[:20], text=f"選產業_{c}")) for c in cats[start:start + CATEGORY_PAGE_SIZE]]
-    if page < total and len(items) < 13:
-        items.append(QuickReplyButton(action=MessageAction(label="更多分類▶", text=f"分類第_{page + 1}頁")))
-    return QuickReply(items=items), f"請選擇市場類別（第 {page}/{total} 頁）👇"
+    return _line_build_category_quick_reply(
+        industry_map.keys(), CATEGORY_PAGE_SIZE, page=page
+    )
 
 # ==================================================
 # 7. 自動化發報引擎
@@ -1180,30 +1181,7 @@ def _store_error_text():
 
 
 def build_projection_flex(code, name, data, amount, base_url):
-    projection = calculate_investment_projection(amount, data)
-    if not projection["ok"]:
-        return _empty_line_bubble("投資試算", "金額不足買進 1 股，請提高投入金額後再試。")
-    return {
-        "type": "bubble",
-        "size": "kilo",
-        "body": {
-            "type": "box", "layout": "vertical", "paddingAll": "18px", "spacing": "sm",
-            "contents": [
-                {"type": "text", "text": f"{name} ({code})", "weight": "bold", "size": "lg", "wrap": True},
-                {"type": "text", "text": f"投入 {projection['amount']:,.0f} 元，約可買 {projection['shares']:,} 股。", "color": "#0f766e", "weight": "bold", "size": "sm", "wrap": True},
-                {"type": "text", "text": f"AI 策略歷史估算損益：{projection['strategy_profit']:,.0f} 元", "color": "#64748b", "size": "sm", "wrap": True},
-                {"type": "text", "text": f"買進持有歷史估算損益：{projection['buy_hold_profit']:,.0f} 元", "color": "#64748b", "size": "sm", "wrap": True},
-                {"type": "text", "text": "這是歷史回測換算，不代表未來獲利。", "color": "#94a3b8", "size": "xs", "wrap": True},
-            ],
-        },
-        "footer": {
-            "type": "box", "layout": "vertical", "paddingAll": "14px",
-            "contents": [{"type": "button", "style": "primary", "color": "#39c6a3", "action": {
-                "type": "uri", "label": "查看完整分析",
-                "uri": f"{base_url.rstrip('/')}/stock/{code}",
-            }}],
-        },
-    }
+    return _line_build_projection_flex(code, name, data, amount, base_url)
 
 
 
@@ -1278,124 +1256,18 @@ def refresh_sector_signals(store):
 
 
 def _build_stock_row(code):
-    name = get_stock_name(code)
-    return {
-        "type": "box",
-        "layout": "horizontal",
-        "paddingAll": "12px",
-        "cornerRadius": "8px",
-        "backgroundColor": "#ffffff",
-        "spacing": "sm",
-        "margin": "md",
-        "action": { "type": "message", "label": f"查詢 {code}", "text": code },
-        "contents": [
-            { "type": "text", "text": f"{code}", "color": "#64748b", "size": "sm", "weight": "bold", "flex": 2 },
-            { "type": "text", "text": f"{name}", "color": "#0f172a", "size": "md", "weight": "bold", "flex": 4 },
-            { "type": "text", "text": "前往分析 ▶", "color": "#0284c7", "size": "xs", "align": "end", "gravity": "center", "flex": 3 }
-        ]
-    }
+    return _line_build_stock_row(code, get_stock_name)
 
 def build_industry_carousel(cat, arr):
-    bubbles = []
-    aggr_list = arr[:5]
-    if aggr_list:
-        bubbles.append({
-            "type": "bubble",
-            "size": "mega",
-            "header": {
-                "type": "box",
-                "layout": "vertical",
-                "backgroundColor": "#ef4444",
-                "paddingAll": "16px",
-                "contents": [ { "type": "text", "text": f"🔥 {cat} | 激進型推薦", "color": "#ffffff", "weight": "bold", "size": "lg" } ]
-            },
-            "body": {
-                "type": "box",
-                "layout": "vertical",
-                "backgroundColor": "#f8fafc",
-                "paddingAll": "12px",
-                "contents": [_build_stock_row(c) for c in aggr_list]
-            }
-        })
-    cons_list = arr[5:10]
-    if cons_list:
-        bubbles.append({
-            "type": "bubble",
-            "size": "mega",
-            "header": {
-                "type": "box",
-                "layout": "vertical",
-                "backgroundColor": "#3b82f6",
-                "paddingAll": "16px",
-                "contents": [ { "type": "text", "text": f"🛡️ {cat} | 保守型推薦", "color": "#ffffff", "weight": "bold", "size": "lg" } ]
-            },
-            "body": {
-                "type": "box",
-                "layout": "vertical",
-                "backgroundColor": "#f8fafc",
-                "paddingAll": "12px",
-                "contents": [_build_stock_row(c) for c in cons_list]
-            }
-        })
-    return { "type": "carousel", "contents": bubbles }
+    return _line_build_industry_carousel(cat, arr, get_stock_name)
 
 
 def _build_sector_signal_row(item):
-    code = item["code"]
-    name = item["name"]
-    return {
-        "type": "box",
-        "layout": "vertical",
-        "paddingAll": "12px",
-        "cornerRadius": "8px",
-        "backgroundColor": "#ffffff",
-        "spacing": "xs",
-        "margin": "md",
-        "action": {"type": "message", "label": f"查詢 {code}", "text": code},
-        "contents": [
-            {
-                "type": "text", "text": f"{name} ({code})",
-                "color": "#0f172a", "size": "md", "weight": "bold", "wrap": True,
-            },
-            {
-                "type": "text",
-                "text": f"AI勝率 {item['prob']}%｜{item['trend']}｜外資5日 {item['foreign_net_5']:,.0f}",
-                "color": "#475569", "size": "xs", "wrap": True,
-            },
-            {
-                "type": "text",
-                "text": f"排序分數 {item['score']:.1f}｜資料 {item['as_of']}",
-                "color": "#0284c7", "size": "xs", "wrap": True,
-            },
-        ],
-    }
+    return _line_build_sector_signal_row(item)
 
 
 def build_sector_signal_carousel(category, items):
-    return {
-        "type": "bubble",
-        "size": "mega",
-        "header": {
-            "type": "box",
-            "layout": "vertical",
-            "backgroundColor": "#0f766e",
-            "paddingAll": "16px",
-            "contents": [{
-                "type": "text", "text": f"📊 {category}｜每日產業預測",
-                "color": "#ffffff", "weight": "bold", "size": "lg", "wrap": True,
-            }],
-        },
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "backgroundColor": "#f8fafc",
-            "paddingAll": "12px",
-            "contents": [
-                _build_sector_signal_row(item)
-                for item in items[:SECTOR_DISPLAY_LIMIT]
-            ],
-        },
-    }
+    return _line_build_sector_signal_carousel(category, items, SECTOR_DISPLAY_LIMIT)
 
 
 def market_insights_payload():
