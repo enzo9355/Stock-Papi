@@ -13,7 +13,7 @@
   --up:#d94b63;
   --down:#1f9a72;
   --amber:#c98542;
-  --font-display:"Lora",serif;
+  --font-display:Georgia,"Times New Roman",serif;
   --font-body:system-ui,-apple-system,"Segoe UI","Noto Sans TC",sans-serif;
   --font-serif:"GenWanMin TW","Noto Serif TC",serif;
   --radius:24px;
@@ -72,6 +72,13 @@ a{color:inherit}
   background:rgba(255,255,255,.52);
   border-color:rgba(203,185,164,.65);
 }
+.account-nav{display:grid;gap:8px;margin-top:24px;padding-top:18px;border-top:1px solid var(--line)}
+.account-nav p{margin:0;color:var(--muted);font-size:11px;line-height:1.5}
+.line-login-button{text-align:center;text-decoration:none;background:#06c755;color:#fff;border-color:#05a948}
+.account-profile-link{display:flex;align-items:center;gap:9px;text-decoration:none}
+.account-profile-link span{display:grid;gap:3px;min-width:0}.account-profile-link strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.account-profile-link small{color:var(--muted)}
+.account-avatar{width:38px;height:38px;border-radius:50%;object-fit:cover}
+.link-button{min-height:40px;padding:8px 10px;border:0;background:transparent;color:var(--muted);text-align:left;cursor:pointer}
 .sidebar-disclosure{margin-top:auto;color:var(--muted);font-size:12px;line-height:1.7}
 .sidebar-disclosure summary{cursor:pointer;font-weight:750}
 .main-content{margin-left:244px}
@@ -265,6 +272,7 @@ a{color:inherit}
 .report-insight-card h3{margin:6px 0 8px}.report-insight-card p{line-height:1.65}
 .report-insight-card dl,.report-professional-grid dl{display:grid;gap:8px}.report-insight-card dl div,.report-professional-grid dl div{display:grid;grid-template-columns:1fr 1fr;gap:8px}.report-insight-card dt,.report-professional-grid dt{color:var(--muted)}.report-insight-card dd,.report-professional-grid dd{margin:0;text-align:right}
 .report-professional-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:14px}
+.account-page{display:grid;gap:18px}.account-profile{display:flex;align-items:center;gap:18px}.account-profile img{width:72px;height:72px;border-radius:50%;object-fit:cover}.account-profile h2{margin:5px 0}.account-action-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.account-action-grid>a,.account-action-grid>section{display:grid;gap:8px;text-decoration:none}.account-action-grid span{color:var(--muted);line-height:1.6}.account-watchlist{display:grid;gap:10px}.account-watchlist article{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px;border:1px solid var(--line);border-radius:16px}.account-watchlist article div{display:grid;gap:4px}.account-watchlist span{color:var(--muted);font-size:12px}
 .button-secondary{background:var(--surface-2);color:var(--text);border-color:var(--line)}
 .skeleton{
   height:56px;
@@ -296,6 +304,7 @@ a{color:inherit}
   color:var(--muted);
 }
 .stock-page{display:grid;gap:16px}
+.watchlist-toggle{margin-top:16px}
 .stock-page [id]{scroll-margin-top:84px}
 .stock-hero{
   display:grid;
@@ -360,13 +369,17 @@ a{color:inherit}
 .summary-card small,.indicator-grid small{color:var(--muted)}
 .confidence-card strong{color:#1d5c51}
 .confidence-track{
+  display:block;
+  width:100%;
   height:6px;
   margin:10px 0;
   background:rgba(31,154,114,.12);
   border-radius:999px;
   overflow:hidden;
 }
-.confidence-track i{display:block;height:100%;background:linear-gradient(90deg,var(--mint),var(--lavender))}
+.confidence-track::-webkit-progress-bar{background:rgba(31,154,114,.12)}
+.confidence-track::-webkit-progress-value{background:linear-gradient(90deg,var(--mint),var(--lavender))}
+.confidence-track::-moz-progress-bar{background:linear-gradient(90deg,var(--mint),var(--lavender))}
 .positive{color:var(--up)}
 .negative{color:var(--down)}
 .chart-shell{overflow:hidden;padding:24px}
@@ -486,6 +499,7 @@ a{color:inherit}
   color:var(--text);
   text-decoration:none;
 }
+.news-meta{display:block;margin-top:5px}
 .skip-link{
   position:fixed;
   z-index:100;
@@ -584,6 +598,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,su
   }
   .report-card{display:grid}
   .report-card-grid,.report-professional-grid{grid-template-columns:1fr}
+  .account-action-grid{grid-template-columns:1fr}
   .report-meta{grid-template-columns:repeat(2,minmax(0,1fr))}
   .report-actions .button{flex:1;text-align:center}
 }

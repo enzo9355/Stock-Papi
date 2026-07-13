@@ -4,6 +4,7 @@ from stock_papi.web.routes.dashboard import register_dashboard_page
 from stock_papi.web.routes.market import register_market_routes
 from stock_papi.web.routes.reports import register_report_routes
 from stock_papi.web.routes.system import register_system_routes
+from stock_papi.web.routes.auth import register_auth_routes
 from stock_papi.integrations.line.webhook import register_line_routes
 
 
@@ -28,6 +29,15 @@ def register_routes(app, dependencies):
         is_us_ticker=dependencies["is_us_ticker"],
         find_industry_peers=dependencies["find_industry_peers"],
         get_stock_name=dependencies["get_stock_name"],
+    )
+    register_auth_routes(
+        app,
+        config=dependencies["line_login_config"],
+        auth_store=dependencies["get_auth_store"],
+        line_store=dependencies["get_line_store"],
+        search_stock=dependencies["search_stock"],
+        http_post=dependencies["auth_http_post"],
+        now=dependencies["auth_now"],
     )
     register_line_routes(
         app,

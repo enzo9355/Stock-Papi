@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}我的關注｜Stock Papi{% endblock %}
+{% block content %}
+<div class="page account-page">
+  <header class="page-header"><div><p class="eyebrow">SYNCED WITH LINE</p><h1>我的關注</h1><p class="muted">這份清單直接讀寫 LINE Bot 既有的使用者狀態，不建立第二份資料。</p></div></header>
+  <section class="panel">
+    <div class="account-watchlist">
+      {% for item in state.watchlist %}
+        <article><div><strong>{{ item.name }}</strong><span>{{ item.code }}</span></div><a class="button button-secondary" href="{{ url_for('stock_page', code=item.code) }}">查看分析</a></article>
+      {% else %}<div class="empty-state">目前沒有關注股票；可從個股頁加入。</div>{% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}

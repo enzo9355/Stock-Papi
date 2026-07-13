@@ -125,6 +125,87 @@ function renderDashboard(data) {
   }
 }
 
+function loginLocation() {
+  const returnTo = `${window.location.pathname}${window.location.search}`;
+  return `/auth/line/login?return_to=${encodeURIComponent(returnTo)}`;
+}
+
+function updateAccountInterface(data) {
+  window.stockPapiAccount = data;
+  const account = bySelector("[data-account-nav]");
+  if (account) {
+    const profile = element("a", "account-profile-link");
+    profile.href = "/account";
+    if (data.user.picture_url) {
+      const picture = element("img", "account-avatar");
+      picture.src = data.user.picture_url;
+      picture.alt = "";
+      picture.referrerPolicy = "no-referrer";
+      profile.append(picture);
+    }
+    const label = element("span", "");
+    label.append(element("strong", "", data.user.display_name));
+    label.append(element("small", "", "已連結 LINE"));
+    profile.append(label);
+    const watchlist = element("a", "nav-link", `我的關注（${data.watchlist.length}）`);
+    watchlist.href = "/account/watchlist";
+    const logout = element("button", "link-button", "登出");
+    logout.type = "button";
+    logout.dataset.accountLogout = "";
+    replaceContent(account, [profile, watchlist, logout]);
+  }
+  const mobile = bySelector("[data-mobile-account]");
+  if (mobile) mobile.textContent = "我的";
+  const toggle = bySelector("[data-watchlist-toggle]");
+  if (toggle) {
+    const watched = data.watchlist.some((item) => item.code === toggle.dataset.code);
+    toggle.dataset.authenticated = "true";
+    toggle.dataset.watched = String(watched);
+    toggle.textContent = watched ? "取消關注" : "加入關注";
+    toggle.setAttribute("aria-pressed", String(watched));
+  }
+}
+
+async function loadAccountState() {
+  try {
+    const response = await fetch("/api/account/state", { headers: { Accept: "application/json" } });
+    if (!response.ok) return;
+    updateAccountInterface(await response.json());
+  } catch (_error) {
+    // 公開頁維持未登入狀態；不顯示內部錯誤。
+  }
+}
+
+async function toggleWatchlist(button) {
+  const account = window.stockPapiAccount;
+  if (!account) {
+    window.location.assign(loginLocation());
+    return;
+  }
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/account/watchlist", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-CSRF-Token": account.csrf_token,
+      },
+      body: JSON.stringify({
+        action: button.dataset.watched === "true" ? "remove" : "add",
+        code: button.dataset.code,
+      }),
+    });
+    if (!response.ok) throw new Error("watchlist");
+    account.watchlist = (await response.json()).watchlist;
+    updateAccountInterface(account);
+  } catch (_error) {
+    button.textContent = "暫時無法更新，請稍後再試";
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function formatNumber(value) {
   return Number.isFinite(value) ? Math.round(value).toLocaleString("zh-TW") : "—";
 }
@@ -192,6 +273,23 @@ function initStockChart() {
 }
 
 document.addEventListener("click", (event) => {
+  const watchlist = event.target.closest("[data-watchlist-toggle]");
+  if (watchlist) {
+    toggleWatchlist(watchlist);
+    return;
+  }
+
+  const logout = event.target.closest("[data-account-logout]");
+  if (logout && window.stockPapiAccount) {
+    fetch("/auth/logout", {
+      method: "POST",
+      headers: { "X-CSRF-Token": window.stockPapiAccount.csrf_token },
+    }).then((response) => {
+      if (response.ok || response.redirected) window.location.assign("/");
+    });
+    return;
+  }
+
   const preset = event.target.closest("[data-amount-preset]");
   if (preset) {
     const input = bySelector("[data-investment-amount]", preset.closest("[data-return-calculator]"));
@@ -231,5 +329,6 @@ document.addEventListener("click", (event) => {
 });
 
 loadDashboard();
+loadAccountState();
 initStockChart();
 initReturnCalculator();

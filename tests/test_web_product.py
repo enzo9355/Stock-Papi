@@ -186,12 +186,28 @@ class WebProductTests(unittest.TestCase):
         css = Path(stock_app.app.static_folder, "app.css").read_text(encoding="utf-8")
 
         self.assertIn("Stock Papi", html)
-        self.assertIn("市場首頁", html)
-        self.assertIn("Lora", html)
+        self.assertIn("今天市場", html)
+        self.assertIn("使用 LINE 登入", html)
+        self.assertNotIn("fonts.googleapis.com", html)
         self.assertIn("GenWanMin", css)
         self.assertIn("--bg:#f6efe6", css)
         self.assertIn(".glass-panel", css)
         self.assertNotIn("量化觀測站", html)
+
+    def test_web_security_headers_and_pinned_chart_supply_chain(self):
+        response = stock_app.app.test_client().get("/dashboard")
+        csp = response.headers["Content-Security-Policy"]
+
+        self.assertIn("frame-ancestors 'none'", csp)
+        self.assertIn("object-src 'none'", csp)
+        self.assertIn("form-action 'self'", csp)
+        self.assertNotIn("'unsafe-inline'", csp)
+        self.assertEqual(response.headers["X-Frame-Options"], "DENY")
+        with patch.object(stock_app, "analyze", return_value=analysis_data()):
+            stock_html = stock_app.app.test_client().get("/stock/2330").get_data(as_text=True)
+        self.assertIn("lightweight-charts@4.2.2", stock_html)
+        self.assertIn("integrity=\"sha384-", stock_html)
+        self.assertNotIn("style=", stock_html)
 
     def test_dashboard_page_is_the_stock_papi_landing_page(self):
         with patch.object(stock_app, "analyze") as analyze:
@@ -293,8 +309,10 @@ class WebProductTests(unittest.TestCase):
             self.assertIn(label, html)
         for label in ["投資金額試算", "外資買賣超", "約可買股數", "外資偏多"]:
             self.assertIn(label, html)
-        for web_only_removed in ["加入關注", "設定提醒", "data-watchlist-add", "data-alert-open"]:
+        for web_only_removed in ["設定提醒", "data-watchlist-add", "data-alert-open"]:
             self.assertNotIn(web_only_removed, html)
+        self.assertIn("data-watchlist-toggle", html)
+        self.assertIn("登入後加入關注", html)
         self.assertIn("data-chart-range", html)
         self.assertIn("<details", html)
         self.assertIn("/static/app.css", html)

@@ -5,9 +5,16 @@ import app as stock_app
 
 EXPECTED_ROUTES = {
     ("/", "dashboard_page", frozenset({"GET"})),
+    ("/account", "account_page", frozenset({"GET"})),
+    ("/account/watchlist", "account_watchlist_page", frozenset({"GET"})),
+    ("/api/account/state", "account_state", frozenset({"GET"})),
+    ("/api/account/watchlist", "account_watchlist_api", frozenset({"POST"})),
     ("/api/dashboard", "dashboard_api", frozenset({"GET"})),
     ("/api/market-insights", "market_insights_api", frozenset({"GET"})),
     ("/broadcast_weekly", "broadcast_weekly", frozenset({"GET"})),
+    ("/auth/line/callback", "line_callback", frozenset({"GET"})),
+    ("/auth/line/login", "line_login", frozenset({"GET"})),
+    ("/auth/logout", "auth_logout", frozenset({"POST"})),
     ("/callback", "callback", frozenset({"POST"})),
     ("/dashboard", "dashboard_page", frozenset({"GET"})),
     ("/health", "healthz", frozenset({"GET"})),
