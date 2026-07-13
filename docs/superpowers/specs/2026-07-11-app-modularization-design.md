@@ -5,7 +5,7 @@
 - `app.py`：4,153 行；同時承擔 Flask、LINE、量化、GCS、新聞、情緒、Flex、報告與 Web route。
 - Flask route：19 條非 static URL rule；既有 endpoint 名稱、method 與 `Gunicorn app:app` 均是公開契約。
 - 既有測試直接 `import app as stock_app`，並 patch module global、cache、HTTP client 與 handler；相容門面不能一次移除。
-- 搬移前基線：345/345 `unittest` 通過；後續新增測試使目前 suite 為 357 項。
+- 搬移前基線：345/345 `unittest` 通過；後續新增測試使目前 suite 為 358 項。
 - 基線的同步 ADC／Firestore token 預熱已在 app factory 階段移除；本機 `import app` 由約 12.5 秒降至約 0.5 秒。
 
 ## 目標
@@ -119,8 +119,9 @@ shared
 - reports、GCS、quant snapshots、market insights、news、sentiment、market、dashboard、stock analysis 與 quant 核心已有各自 repository／integration／service／quant 邊界。
 - LINE Flex、notifications、webhook routes、message 與 postback handlers 已移出 compatibility module；handler 透過明確 dependency mapping 協調舊 patch points。
 - `create_app()` 每次建立新的 Flask instance，config 與 URL map 不共用；process-level data caches 仍刻意共享，以保留既有 TTL 與 fallback semantics。
-- `application.py` 保留舊測試仍 patch 的 compatibility exports、LINE/store clients、provider wrappers與 Papi prompt orchestration。這是明確過渡邊界；新 production code 不得再往內新增責任。
+- `application.py` 已縮為 process runtime 組裝、route／handler dependency mapping 與舊測試仍 patch 的薄 compatibility wrappers；Papi、news、market providers、LINE state／presentation 與 payload 實作均已移至各自模組。新 production code 不得再往 compatibility layer 新增業務邏輯。
 - quant `uncompressed_size`、SHA-256、compressed size、path allowlist 與 schema 驗證均保留在 repository fail-closed 路徑。
+- 目前 Windows App Control 封鎖 worktree／新安裝 NumPy、SciPy 的 `.pyd`，且既有 `.deps` 未含 matplotlib；最終本機結果為 355/358。三項未通過均為科學運算／PDF binary dependency，focused Web、LINE、repository、factory、route 與 cold-start 回歸均通過。
 
 ## `local_quant.py` 後續設計
 

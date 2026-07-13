@@ -196,5 +196,6 @@
 ## Completion record
 
 - Completed commits cover shared helpers, LINE Flex, report/GCS repositories, news/sentiment, dashboard/market/stock routes and services, stock analysis, quant core, LINE webhook/handlers, independent Flask factory, legacy HTML renderer, logging helpers and central route registration.
+- Final composition cleanup also moved remaining LINE presentation/state helpers, Papi research orchestration, news orchestration, market providers, runtime loaders, market-insights payloads and broadcast insight generation out of `application.py`.
 - Compatibility is deliberate: root `app.py` aliases `stock_papi.application` so existing `patch.object(stock_app, ...)` tests continue to affect the dynamic dependency callbacks used by routes and handlers.
 - Per-app Flask state is isolated. Existing process-level caches remain canonical singletons because changing cache ownership or TTL in the same refactor would alter behavior.
