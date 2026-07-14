@@ -435,6 +435,28 @@ File Creation Time: 07082026||||||
         with self.assertRaises(ValueError):
             build_stock_snapshot(empty, "TW", "2330")
 
+    def test_taiwan_snapshot_rejects_target_market_date_mismatch(self):
+        frame = pd.DataFrame(
+            {"Close": [100.0], "AI_P": [63.0]},
+            index=pd.to_datetime(["2026-07-16"]),
+        )
+        frame.index.name = "Date"
+        pipeline = SimpleNamespace(
+            get_data=lambda _symbol, _days: frame.copy(),
+            calc_all=lambda data: data,
+            run_ai_engine=lambda _data: {"accuracy": 55.0},
+            get_stock_name=lambda symbol: symbol,
+            PREDICTION_HORIZON=5,
+        )
+
+        with self.assertRaisesRegex(ValueError, "target market date mismatch"):
+            build_stock_snapshot(
+                pipeline,
+                "TW",
+                "2330",
+                target_market_date=datetime.date(2026, 7, 17),
+            )
+
     def test_us_snapshot_reuses_existing_pipeline(self):
         frame = pd.DataFrame(
             {"Close": [100.0], "AI_P": [63.0]},

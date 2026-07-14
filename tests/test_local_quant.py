@@ -17,6 +17,7 @@ from local_quant import (
     _read_insights_metric,
     load_checkpoint,
     main,
+    prepare_daily_checkpoint,
     save_checkpoint,
     validate_data_root,
     window_phase,
@@ -28,6 +29,58 @@ def at(hour, minute):
 
 
 class LocalQuantTests(unittest.TestCase):
+    def test_daily_checkpoint_archives_incompatible_target_before_replacement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ensure_layout(root)
+            base = {
+                "schema_version": 1,
+                "job_type": "daily_prediction",
+                "source_manifest": "quant/v1/manifests/TW-20260714T090000Z-aaaaaaaaaaaa.json",
+                "source_manifest_sha256": "a" * 64,
+                "model_version": "lgbm-5d-v1",
+                "next_index": 0,
+                "completed_symbols": [],
+                "failed_symbols": [],
+                "started_at": "2026-07-14T17:00:00+08:00",
+                "updated_at": "2026-07-14T17:00:00+08:00",
+                "status": "running",
+            }
+            first = dict(
+                base,
+                run_id="20260714T090000Z-aaaaaaaa",
+                target_market_date="2026-07-14",
+            )
+            second = dict(
+                base,
+                run_id="20260715T090000Z-bbbbbbbb",
+                target_market_date="2026-07-15",
+                source_manifest="quant/v1/manifests/TW-20260715T090000Z-bbbbbbbbbbbb.json",
+                source_manifest_sha256="b" * 64,
+                started_at="2026-07-15T17:00:00+08:00",
+                updated_at="2026-07-15T17:00:00+08:00",
+            )
+
+            current = prepare_daily_checkpoint(root, first)
+            replacement = prepare_daily_checkpoint(root, second)
+
+            self.assertEqual(current["run_id"], first["run_id"])
+            self.assertEqual(replacement["run_id"], second["run_id"])
+            archive = (
+                root
+                / "checkpoints"
+                / "daily_prediction"
+                / "archive"
+                / f"{first['run_id']}.json"
+            )
+            self.assertEqual(json.loads(archive.read_text(encoding="utf-8")), current)
+            persisted = json.loads(
+                (root / "checkpoints" / "daily_prediction" / "current.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(persisted, replacement)
+
     def test_insights_metric_keeps_core_values_when_optional_field_is_dirty(self):
         document = {
             "name": "台積電", "as_of": "2026-07-06",

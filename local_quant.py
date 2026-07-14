@@ -273,6 +273,46 @@ def save_checkpoint(root, state, market="TW"):
     _write_json_atomic(checkpoint, state)
 
 
+def prepare_daily_checkpoint(root, requested):
+    from stock_papi.batch.contracts import ContractError, DailyRunCheckpoint
+
+    desired = DailyRunCheckpoint.from_dict(requested)
+    directory = Path(root) / "checkpoints" / "daily_prediction"
+    directory.mkdir(parents=True, exist_ok=True)
+    current_path = directory / "current.json"
+    if not current_path.exists():
+        _write_json_atomic(current_path, desired.to_dict())
+        return desired.to_dict()
+
+    try:
+        current_document = json.loads(current_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ContractError("daily checkpoint 無法讀取") from exc
+    current = DailyRunCheckpoint.from_dict(current_document)
+    try:
+        current.assert_resume_compatible(
+            target_market_date=desired.target_market_date,
+            source_manifest_sha256=desired.source_manifest_sha256,
+            model_version=desired.model_version,
+        )
+    except ContractError:
+        archive_dir = directory / "archive"
+        archive_dir.mkdir(exist_ok=True)
+        archive_path = archive_dir / f"{current.run_id}.json"
+        if archive_path.exists():
+            try:
+                archived = json.loads(archive_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise ContractError("daily checkpoint 封存檔無法讀取") from exc
+            if archived != current.to_dict():
+                raise ContractError("daily checkpoint 封存衝突")
+        else:
+            _write_json_atomic(archive_path, current.to_dict())
+        _write_json_atomic(current_path, desired.to_dict())
+        return desired.to_dict()
+    return current.to_dict()
+
+
 def _write_json_atomic(path, state):
     path = Path(path)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -1218,7 +1258,9 @@ def get_us_symbols(root, fetch_json=None, now=None, fetch_nasdaq=None):
     return symbols
 
 
-def build_stock_snapshot(pipeline, market, symbol):
+def build_stock_snapshot(pipeline, market, symbol, target_market_date=None):
+    if target_market_date is not None and type(target_market_date) is not datetime.date:
+        raise TypeError("target_market_date must be a date")
     symbol = validate_market_symbol(market, symbol)
     frame = pipeline.get_data(symbol, 730)
     if frame is None or frame.empty:
@@ -1241,6 +1283,8 @@ def build_stock_snapshot(pipeline, market, symbol):
     as_of = str(latest.get("Date", "")).split("T", 1)[0]
     if not as_of:
         raise ValueError("latest market date is unavailable")
+    if target_market_date is not None and as_of != target_market_date.isoformat():
+        raise ValueError("target market date mismatch")
     horizon = int(getattr(pipeline, "PREDICTION_HORIZON", 5))
     return {
         "as_of": as_of,
