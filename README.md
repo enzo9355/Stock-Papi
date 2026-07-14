@@ -47,6 +47,15 @@ Web 服務：<https://line-stock-bot-1067991373149.asia-east1.run.app>
 - 快照採 SHA-256、內容定址物件、immutable manifest 與原子 `latest` 指標，避免讀到半套資料。
 - MOPS、ETF 持倉、產業地圖與供應鏈聯動都在本地產生；Cloud Run 只驗證並讀取成品。
 
+### 雙每日報告與背景驗證
+
+- 收盤後的 `post_close` 綁定已驗證交易日、immutable quant manifest 與 promoted backtest，使用 fast lane 產生下一交易日起五個交易日的預測。
+- 開盤前的 `pre_market` 只疊加具來源與時間的新鮮隔夜風險，不改寫盤後機率、模型證據或 calibration。
+- 完整回測使用獨立 lock／checkpoint，在 daily pipeline 執行時於 symbol boundary yield；只有 parity、leakage、calibration、schema、security、quality 六個 gate 全過才可 promotion。
+- 預測與 settlement 使用 append-only ledger；active 與 invalid 不納入歷史準確率。
+- report schema v2 允許同一適用交易日同時保存盤後與盤前，reader 仍嚴格兼容 v1。新增 `/reports/trading-day/<date>`、`/reports/<date>/pre-market`、`/reports/weekly/<week_id>`。
+- Windows 排程、dry-run backfill、shadow cutover、troubleshooting 與 rollback 詳見 [雙每日報告操作手冊](docs/dual-daily-report-runbook.md)。
+
 ## 模型與資料
 
 預測目標是「未來五個交易日方向」，核心模型為 LightGBM binary classifier，驗證採時間序列切分並保留五日 gap，避免未來資料洩漏。回測使用五日報酬並扣除估計交易成本。
