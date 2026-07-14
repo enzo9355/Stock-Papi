@@ -238,6 +238,42 @@ def load_report_source(
     )
 
 
+def load_report_source_manifest(
+    root: Path,
+    manifest_path: str,
+    manifest_sha256: str,
+    *,
+    market: str = "TW",
+    report_date: datetime.date | None = None,
+    config: ReportConfig | None = None,
+) -> LoadedReportSource:
+    """以明確 path + SHA 載入 immutable manifest，不讀取可變 latest pointer。"""
+    prefix = "quant/v1/"
+    if not isinstance(manifest_path, str) or not manifest_path.startswith(prefix):
+        raise ReportSourceError("explicit manifest path is invalid")
+    relative = manifest_path[len(prefix) :]
+    if (
+        re.fullmatch(
+            r"manifests/TW-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}\.json", relative
+        )
+        is None
+        or re.fullmatch(r"[0-9a-f]{64}", str(manifest_sha256)) is None
+    ):
+        raise ReportSourceError("explicit manifest identity is invalid")
+    settings = config or ReportConfig(root=Path(root), market=market)
+    if market != "TW":
+        raise ReportSourceError("第一階段只支援 TW 日報")
+    publish = Path(root) / "publish" / "quant" / "v1"
+    return _load_manifest_source(
+        publish,
+        market,
+        relative,
+        manifest_sha256,
+        settings,
+        report_date,
+    )
+
+
 def load_previous_report_source(
     root: Path,
     before: datetime.date,
