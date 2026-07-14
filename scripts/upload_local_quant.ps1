@@ -21,7 +21,8 @@ $Global:VerifiedDirs = @{}
 
 function Send-ReportUploadFailureNotification {
     param([string]$Message)
-    $AdminUserId = 'U72f8c70881c4107fd03e506e97d3b75d'
+    $AdminUserId = [string]$env:REPORT_ADMIN_USER_ID
+    if ($AdminUserId -notmatch '^U[0-9a-f]{32}$') { return }
     $OldPythonPath = $env:PYTHONPATH
     try {
         $env:PYTHONPATH = $null

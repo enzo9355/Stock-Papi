@@ -38,6 +38,7 @@ class LocalQuantTaskTests(unittest.TestCase):
             "--recursive",
             "service-account.json",
             "FINMIND_PASSWORD",
+            "U72f8c70881c4107fd03e506e97d3b75d",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, source)
