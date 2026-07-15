@@ -80,9 +80,18 @@ def main(argv=None):
         frame = pipeline.calc_all(frame)
         if frame is None or frame.empty:
             raise ValueError("calculated history is unavailable")
-        backtest = pipeline.run_ai_engine(frame)
+        backtest = pipeline.run_ai_engine(frame, include_oos=True)
         if not isinstance(backtest, dict):
             raise ValueError("full backtest result is unavailable")
+        oos_predictions = backtest.pop("oos_predictions", None)
+        if (
+            not isinstance(oos_predictions, list)
+            or len(oos_predictions) < 30
+            or backtest.get("five_session_gap") is not True
+            or type(backtest.get("fold_count")) is not int
+            or backtest["fold_count"] < 1
+        ):
+            raise ValueError("full backtest OOS evidence is unavailable")
         _write_atomic(
             result_path,
             {
@@ -97,6 +106,7 @@ def main(argv=None):
                 .isoformat()
                 .replace("+00:00", "Z"),
                 "backtest": backtest,
+                "oos_predictions": oos_predictions,
             },
         )
 

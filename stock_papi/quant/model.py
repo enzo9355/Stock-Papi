@@ -77,7 +77,7 @@ def run_latest_inference(frame, *, add_prediction_target, pd, np, logger):
 
 def run_ai_engine(
     frame, *, add_prediction_target, build_time_splits,
-    score_oos_predictions, pd, np, logger,
+    score_oos_predictions, pd, np, logger, include_oos=False,
 ):
     try:
         from lightgbm import LGBMClassifier
@@ -86,7 +86,10 @@ def run_ai_engine(
         if training is None:
             return None
         oos_prob = pd.Series(np.nan, index=training.index, dtype=float)
-        for train_index, test_index in build_time_splits(len(training)):
+        oos_fold = pd.Series(-1, index=training.index, dtype=int)
+        for fold_index, (train_index, test_index) in enumerate(
+            build_time_splits(len(training))
+        ):
             fold = training.iloc[train_index]
             if fold["T"].nunique() < 2:
                 continue
@@ -95,6 +98,7 @@ def run_ai_engine(
             oos_prob.iloc[test_index] = model.predict_proba(
                 training.iloc[test_index][MODEL_FEATURES]
             )[:, 1]
+            oos_fold.iloc[test_index] = fold_index
         valid = oos_prob.notna()
         if valid.sum() < 30:
             return None
@@ -108,6 +112,22 @@ def run_ai_engine(
         frame.loc[oos_prob.loc[valid].index, "AI_P"] = oos_prob.loc[valid] * 100
         frame.loc[frame.index[-1], "AI_P"] = latest_probability
         metrics["top_features"] = top_features
+        if include_oos:
+            # 僅供 immutable full-backtest artifact 使用；預設 daily 回傳不變。
+            metrics["oos_predictions"] = [
+                {
+                    "source_market_date": pd.Timestamp(index).date().isoformat(),
+                    "probability": float(oos_prob.loc[index]),
+                    "future_return": float(training.loc[index, "FUTURE_RET_5"]),
+                    "direction": int(training.loc[index, "T"]),
+                    "fold_index": int(oos_fold.loc[index]),
+                }
+                for index in oos_prob.loc[valid].index
+            ]
+            metrics["fold_count"] = len(
+                {int(value) for value in oos_fold.loc[valid].tolist()}
+            )
+            metrics["five_session_gap"] = True
         if metrics["trades"] == 0:
             metrics["conclusion"] = "⏸️ 訊號空窗：模型未發現高勝率進場點，選擇空手觀望。"
         elif metrics["strat_cum"] > metrics["bh_cum"]:

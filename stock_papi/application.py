@@ -565,7 +565,7 @@ def build_time_splits(n_samples):
 def score_oos_predictions(future_returns, probabilities):
     return _score_oos_predictions(future_returns, probabilities, pd=pd, np=np)
 
-def run_ai_engine(df):
+def run_ai_engine(df, *, include_oos=False):
     return _run_ai_engine(
         df,
         add_prediction_target=add_prediction_target,
@@ -574,6 +574,7 @@ def run_ai_engine(df):
         pd=pd,
         np=np,
         logger=logger,
+        include_oos=include_oos,
     )
 
 

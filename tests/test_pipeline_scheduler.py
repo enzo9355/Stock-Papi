@@ -6,7 +6,7 @@ class PipelineSchedulerTests(unittest.TestCase):
     def test_new_tasks_are_separate_resilient_limited_and_secret_free(self):
         scripts = Path(__file__).parents[1] / "scripts"
         script = (scripts / "install_pipeline_tasks.ps1").read_text(encoding="utf-8")
-        for name in ("StockPapi-TW-PostClose", "StockPapi-TW-PreMarket", "StockPapi-FullBacktest", "StockPapi-US-Daily", "StockPapi-WeeklyModel", "StockPapi-ReportUploadRecovery"):
+        for name in ("ABSORB-TW-PostClose", "ABSORB-TW-PreMarket", "ABSORB-FullBacktest", "ABSORB-US-Daily", "ABSORB-WeeklyModel", "ABSORB-ReportUploadRecovery"):
             self.assertIn(name, script)
         for setting in ("StartWhenAvailable = $true", "WakeToRun = $true", "MultipleInstances IgnoreNew", "RestartCount 3", "RunLevel Limited"):
             self.assertIn(setting, script)
@@ -23,11 +23,23 @@ class PipelineSchedulerTests(unittest.TestCase):
         ):
             with self.subTest(wrapper=wrapper):
                 self.assertTrue((scripts / wrapper).is_file())
-                self.assertIn(wrapper, script)
+                self.assertIn(wrapper, (scripts / "invoke_pipeline_task.ps1").read_text(encoding="utf-8"))
+        self.assertIn("invoke_pipeline_task.ps1", script)
         self.assertIn("Task wrapper not found", script)
         self.assertIn("New-ScheduledTaskTrigger -Weekly", script)
+        self.assertIn(r"D:\AbsorbData", script)
+        self.assertIn("-RequireReportV2", (scripts / "invoke_pipeline_task.ps1").read_text(encoding="utf-8"))
         post_close = (scripts / "run_tw_post_close_pipeline.ps1").read_text(encoding="utf-8")
         self.assertLess(post_close.index("calendar-check"), post_close.index("--post-close"))
+
+    def test_task_wrapper_records_success_or_failure_without_secrets(self):
+        source = (Path(__file__).parents[1] / "scripts" / "invoke_pipeline_task.ps1").read_text(encoding="utf-8")
+        for required in ("logs\\tasks", "current-", "Tee-Object", "$LASTEXITCODE", "success = $false"):
+            with self.subTest(required=required):
+                self.assertIn(required, source)
+        for forbidden in ("LINE_CHANNEL_ACCESS_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "Bearer"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
 
 
 if __name__ == "__main__": unittest.main()

@@ -101,6 +101,31 @@ class DailyInferenceTests(unittest.TestCase):
         self.assertAlmostEqual(fast["probability"], full_frame["AI_P"].iloc[-1])
         self.assertEqual(FakeClassifier.fit_sizes, [140, 80, 140])
 
+    def test_full_engine_can_return_immutable_oos_evidence_without_changing_default(self):
+        frame, add_target = frame_and_target()
+        with patch.dict(sys.modules, {"lightgbm": self.lightgbm}):
+            metrics = run_ai_engine(
+                frame,
+                add_prediction_target=add_target,
+                build_time_splits=lambda _size: [(np.arange(80), np.arange(90, 120))],
+                score_oos_predictions=lambda _returns, _probabilities: {
+                    "trades": 0,
+                    "strat_cum": 0.0,
+                    "bh_cum": 0.0,
+                    "sharpe": 0.0,
+                    "mdd": 0.0,
+                },
+                pd=pd,
+                np=np,
+                logger=self.logger,
+                include_oos=True,
+            )
+
+        self.assertEqual(len(metrics["oos_predictions"]), 30)
+        self.assertEqual(metrics["fold_count"], 1)
+        self.assertTrue(metrics["five_session_gap"])
+        self.assertEqual(metrics["oos_predictions"][0]["fold_index"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
