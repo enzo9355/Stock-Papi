@@ -2,7 +2,7 @@
 
 from linebot.models import MessageAction, QuickReply, QuickReplyButton
 
-from stock_papi.integrations.line.flex import _empty_line_bubble
+from stock_papi.integrations.line.flex import ABSORB_NAVY, _empty_line_bubble
 from stock_papi.quant.projection import calculate_investment_projection
 from stock_papi.shared.symbol import get_instrument_type
 
@@ -37,7 +37,7 @@ def build_projection_flex(code, name, data, amount, base_url):
         },
         "footer": {
             "type": "box", "layout": "vertical", "paddingAll": "14px",
-            "contents": [{"type": "button", "style": "primary", "color": "#39c6a3", "action": {
+            "contents": [{"type": "button", "style": "primary", "color": ABSORB_NAVY, "action": {
                 "type": "uri", "label": "查看完整分析",
                 "uri": f"{base_url.rstrip('/')}/stock/{code}",
             }}],
@@ -59,7 +59,7 @@ def _build_stock_row(code, get_stock_name):
         "contents": [
             { "type": "text", "text": f"{code}", "color": "#64748b", "size": "sm", "weight": "bold", "flex": 2 },
             { "type": "text", "text": f"{name}", "color": "#0f172a", "size": "md", "weight": "bold", "flex": 4 },
-            { "type": "text", "text": "前往分析 ▶", "color": "#0284c7", "size": "xs", "align": "end", "gravity": "center", "flex": 3 }
+            { "type": "text", "text": "前往分析 ▶", "color": ABSORB_NAVY, "size": "xs", "align": "end", "gravity": "center", "flex": 3 }
         ]
     }
 
@@ -74,9 +74,9 @@ def build_industry_carousel(cat, arr, get_stock_name):
             "header": {
                 "type": "box",
                 "layout": "vertical",
-                "backgroundColor": "#ef4444",
+                "backgroundColor": ABSORB_NAVY,
                 "paddingAll": "16px",
-                "contents": [ { "type": "text", "text": f"🔥 {cat} | 激進型推薦", "color": "#ffffff", "weight": "bold", "size": "lg" } ]
+                "contents": [ { "type": "text", "text": f"ABSORB｜{cat}｜激進型推薦", "color": "#ffffff", "weight": "bold", "size": "lg", "wrap": True } ]
             },
             "body": {
                 "type": "box",
@@ -94,9 +94,9 @@ def build_industry_carousel(cat, arr, get_stock_name):
             "header": {
                 "type": "box",
                 "layout": "vertical",
-                "backgroundColor": "#3b82f6",
+                "backgroundColor": ABSORB_NAVY,
                 "paddingAll": "16px",
-                "contents": [ { "type": "text", "text": f"🛡️ {cat} | 保守型推薦", "color": "#ffffff", "weight": "bold", "size": "lg" } ]
+                "contents": [ { "type": "text", "text": f"ABSORB｜{cat}｜保守型推薦", "color": "#ffffff", "weight": "bold", "size": "lg", "wrap": True } ]
             },
             "body": {
                 "type": "box",
@@ -137,7 +137,7 @@ def _build_sector_signal_row(item):
             {
                 "type": "text",
                 "text": f"排序分數 {item['score']:.1f}｜資料 {item['as_of']}",
-                "color": "#0284c7", "size": "xs", "wrap": True,
+                "color": ABSORB_NAVY, "size": "xs", "wrap": True,
             },
         ],
     }
@@ -150,10 +150,10 @@ def build_sector_signal_carousel(category, items, display_limit):
         "header": {
             "type": "box",
             "layout": "vertical",
-            "backgroundColor": "#0f766e",
+            "backgroundColor": ABSORB_NAVY,
             "paddingAll": "16px",
             "contents": [{
-                "type": "text", "text": f"📊 {category}｜每日產業預測",
+                "type": "text", "text": f"ABSORB｜{category}｜每日產業預測",
                 "color": "#ffffff", "weight": "bold", "size": "lg", "wrap": True,
             }],
         },

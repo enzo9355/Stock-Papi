@@ -34,24 +34,18 @@ def cloud_run_info(project, region, service):
     return payload["status"]["url"].rstrip("/"), envs
 
 
-def draw_menu(path, font_path):
+def draw_menu(path, font_path, logo_path):
     width, height = 2500, 1686
-    image = Image.new("RGB", (width, height), "#06111f")
+    image = Image.new("RGB", (width, height), "#ffffff")
     draw = ImageDraw.Draw(image)
-    for y in range(height):
-        t = y / height
-        color = (
-            int(6 * (1 - t) + 16 * t),
-            int(17 * (1 - t) + 40 * t),
-            int(31 * (1 - t) + 70 * t),
-        )
-        draw.line([(0, y), (width, y)], fill=color)
 
     font_brand = ImageFont.truetype(str(font_path), 56)
     font_label = ImageFont.truetype(str(font_path), 140)
     font_hint = ImageFont.truetype(str(font_path), 46)
     font_code = ImageFont.truetype(str(font_path), 82)
-    draw.text((80, 36), "STOCK PAPI", font=font_brand, fill="#39c6a3")
+    logo = Image.open(logo_path).convert("RGB").resize((88, 88), Image.Resampling.LANCZOS)
+    image.paste(logo, (42, 12))
+    draw.text((150, 24), "ABSORB", font=font_brand, fill="#122643")
 
     tiles = [
         (42, 132, "01", "看大盤", "今天台股強不強"),
@@ -65,20 +59,20 @@ def draw_menu(path, font_path):
         draw.rounded_rectangle(
             [x, y, x + 790, y + 710],
             radius=46,
-            fill="#102b45",
-            outline="#2b4f70",
+            fill="#ffffff" if code in {"01", "03", "05"} else "#eaf0f7",
+            outline="#d9e0e8",
             width=5,
         )
         draw.rounded_rectangle(
             [x + 42, y + 92, x + 180, y + 200],
             radius=32,
-            fill="#102b45",
-            outline="#39c6a3",
+            fill="#122643",
+            outline="#122643",
             width=4,
         )
-        draw.text((x + 68, y + 103), code, font=font_code, fill="#39c6a3")
-        draw.text((x + 84, y + 290), label, font=font_label, fill="#eef6ff")
-        draw.text((x + 84, y + 520), hint, font=font_hint, fill="#9fb4cc")
+        draw.text((x + 68, y + 103), code, font=font_code, fill="#ffffff")
+        draw.text((x + 84, y + 290), label, font=font_label, fill="#152033")
+        draw.text((x + 84, y + 520), hint, font=font_hint, fill="#586579")
 
     image.save(path, "PNG", optimize=True)
 
@@ -109,7 +103,7 @@ def main():
 
     root = Path(__file__).resolve().parents[1]
     png = root / "assets" / "rich-menu.png"
-    draw_menu(png, root / "taipei_sans.ttf")
+    draw_menu(png, root / "taipei_sans.ttf", root / "static" / "brand" / "absorb-mark-128.png")
 
     if args.base_url:
         base_url, envs = args.base_url.rstrip("/"), {}
@@ -138,8 +132,8 @@ def main():
     payload = {
         "size": {"width": 2500, "height": 1686},
         "selected": True,
-        "name": "Stock Papi main menu",
-        "chatBarText": "Stock Papi",
+        "name": "ABSORB main menu",
+        "chatBarText": "ABSORB",
         "areas": [
             {"bounds": {"x": x, "y": y, "width": w, "height": h}, "action": action}
             for x, y, w, h, action in areas

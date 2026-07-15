@@ -224,7 +224,7 @@ def migrate_manifest(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="安全遷移 legacy TW quant manifest")
-    parser.add_argument("--root", type=Path, default=Path(r"D:\StockPapiData"))
+    parser.add_argument("--root", type=Path, default=Path(r"D:\AbsorbData"))
     parser.add_argument("--market", choices=("TW",), default="TW")
     parser.add_argument(
         "--latest", type=Path, default=Path(r"quant\v1\latest-TW.json")

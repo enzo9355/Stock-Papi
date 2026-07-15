@@ -1,4 +1,4 @@
-"""Stock Papi 本機批次狀態 CLI。"""
+"""ABSORB 本機批次狀態 CLI。"""
 
 import argparse
 import datetime
@@ -159,14 +159,14 @@ def run_calendar_check(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Stock Papi batch operations")
+    parser = argparse.ArgumentParser(description="ABSORB batch operations")
     subparsers = parser.add_subparsers(dest="command", required=True)
     status = subparsers.add_parser("status", help="顯示所有 batch job 狀態")
-    status.add_argument("--root", default=r"D:\StockPapiData")
+    status.add_argument("--root", default=r"D:\AbsorbData")
     pre_market = subparsers.add_parser(
         "pre-market", help="由已驗證盤後 base 建立盤前 overlay"
     )
-    pre_market.add_argument("--root", default=r"D:\StockPapiData")
+    pre_market.add_argument("--root", default=r"D:\AbsorbData")
     pre_market.add_argument(
         "--applicable-trading-date",
         type=datetime.date.fromisoformat,
@@ -174,7 +174,7 @@ def main(argv=None):
     )
     pre_market.add_argument("--source-file", action="append", default=[])
     notify = subparsers.add_parser("notify", help="推送已驗證的公開報告連結")
-    notify.add_argument("--root", default=r"D:\StockPapiData")
+    notify.add_argument("--root", default=r"D:\AbsorbData")
     notify.add_argument(
         "--report-type",
         choices=("post_close", "pre_market", "weekly_model"),

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}找不到頁面｜ABSORB{% endblock %}
+{% block content %}
+<section class="empty-state" aria-labelledby="not-found-title">
+  <p class="eyebrow">ABSORB</p>
+  <h1 id="not-found-title">找不到這個頁面</h1>
+  <p>網址可能已變更，或內容目前不存在。</p>
+  <a class="button button-primary" href="{{ url_for('dashboard_page') }}">回到市場總覽</a>
+</section>
+{% endblock %}

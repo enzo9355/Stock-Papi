@@ -169,7 +169,7 @@ function loginLocation() {
 }
 
 function updateAccountInterface(data) {
-  window.stockPapiAccount = data;
+  window.absorbAccount = data;
   const account = bySelector("[data-account-nav]");
   if (account) {
     const profile = element("a", "account-profile-link");
@@ -214,8 +214,49 @@ async function loadAccountState() {
   }
 }
 
+function appendConversationMessage(log, role, text) {
+  const empty = bySelector(".empty-state", log);
+  if (empty) empty.remove();
+  const message = element("p", `conversation-message ${role}`, text);
+  log.append(message);
+  log.scrollTop = log.scrollHeight;
+}
+
+function initConversation() {
+  const form = bySelector("[data-conversation-form]");
+  const panel = bySelector("[data-conversation-endpoint]");
+  const log = bySelector("[data-conversation-log]");
+  if (!form || !panel || !log) return;
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const input = bySelector("input[name='question']", form);
+    const button = bySelector("button", form);
+    const question = input.value.trim();
+    if (!question) return;
+    appendConversationMessage(log, "user", question);
+    input.value = "";
+    button.disabled = true;
+    const headers = { Accept: "application/json", "Content-Type": "application/json" };
+    if (window.absorbAccount?.csrf_token) headers["X-CSRF-Token"] = window.absorbAccount.csrf_token;
+    try {
+      const response = await fetch(panel.dataset.conversationEndpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ question }),
+      });
+      const data = await response.json();
+      appendConversationMessage(log, "assistant", response.ok ? data.text : "自然語言分析暫時無法使用，請稍後再試。");
+    } catch (_error) {
+      appendConversationMessage(log, "assistant", "自然語言分析暫時無法使用，固定指令與股票查詢不受影響。");
+    } finally {
+      button.disabled = false;
+      input.focus();
+    }
+  });
+}
+
 async function toggleWatchlist(button) {
-  const account = window.stockPapiAccount;
+  const account = window.absorbAccount;
   if (!account) {
     window.location.assign(loginLocation());
     return;
@@ -289,9 +330,9 @@ function initStockChart() {
   const chart = LightweightCharts.createChart(container, {
     width: container.clientWidth,
     height,
-    layout: { background: { color: "transparent" }, textColor: "#74685d" },
-    grid: { vertLines: { color: "#e7dacd" }, horzLines: { color: "#e7dacd" } },
-    timeScale: { borderColor: "#dbcdbd" },
+    layout: { background: { color: "transparent" }, textColor: "#586579" },
+    grid: { vertLines: { color: "#d9e0e8" }, horzLines: { color: "#d9e0e8" } },
+    timeScale: { borderColor: "#b7c1cf" },
   });
   const candleSeries = chart.addCandlestickSeries({
     upColor: "#d94b63",
@@ -301,8 +342,8 @@ function initStockChart() {
     wickDownColor: "#1f9a72",
   });
   candleSeries.setData(candles);
-  chart.addLineSeries({ color: "#7fd7c4", lineWidth: 1, title: "MA20" }).setData(JSON.parse(raw.ma20));
-  chart.addLineSeries({ color: "#c98542", lineWidth: 2, lineStyle: 2, title: "五日預測" }).setData(JSON.parse(raw.prediction));
+  chart.addLineSeries({ color: "#2b6cb0", lineWidth: 1, title: "MA20" }).setData(JSON.parse(raw.ma20));
+  chart.addLineSeries({ color: "#122643", lineWidth: 2, lineStyle: 2, title: "五日預測" }).setData(JSON.parse(raw.prediction));
   window.stockChart = { chart, length: candles.length };
   setChartRange(90);
   const resize = () => chart.resize(container.clientWidth, measureChartHeight(container));
@@ -318,10 +359,10 @@ document.addEventListener("click", (event) => {
   }
 
   const logout = event.target.closest("[data-account-logout]");
-  if (logout && window.stockPapiAccount) {
+  if (logout && window.absorbAccount) {
     fetch("/auth/logout", {
       method: "POST",
-      headers: { "X-CSRF-Token": window.stockPapiAccount.csrf_token },
+      headers: { "X-CSRF-Token": window.absorbAccount.csrf_token },
     }).then((response) => {
       if (response.ok || response.redirected) window.location.assign("/");
     });
@@ -370,3 +411,4 @@ loadDashboard();
 loadAccountState();
 initStockChart();
 initReturnCalculator();
+initConversation();

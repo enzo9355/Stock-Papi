@@ -7,8 +7,8 @@ from pathlib import Path
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Stock Papi weekly model report")
-    parser.add_argument("--root", type=Path, default=Path(r"D:\StockPapiData"))
+    parser = argparse.ArgumentParser(description="ABSORB weekly model report")
+    parser.add_argument("--root", type=Path, default=Path(r"D:\AbsorbData"))
     parser.add_argument("--calendar-artifact", type=Path, action="append", required=True)
     args = parser.parse_args(argv)
 

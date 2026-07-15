@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ d.name }}（{{ d.code }}）｜Stock Papi{% endblock %}
+{% block title %}{{ d.name }}（{{ d.code }}）｜ABSORB{% endblock %}
 {% block head %}<script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js" integrity="sha384-qQnpH1Chlwm0r93GZ6NgZoEehIelWkhwbBtJMWh0P5wPqySGEt8UjETGKMF0GUdn" crossorigin="anonymous"></script>{% endblock %}
 {% block content %}
 {% set recommendation = d.get('recommendation') or {
@@ -48,7 +48,7 @@
   </nav>
 
   <section class="panel decision-panel" aria-labelledby="decision-title">
-    <div><p class="eyebrow">AI 量化解方</p><h2 id="decision-title">Papi 判讀</h2></div>
+    <div><p class="eyebrow">AI 量化解方</p><h2 id="decision-title">ABSORB 判讀</h2></div>
     <div class="reason-columns">
       <section><h3>支持這項建議</h3><ul>{% for reason in recommendation.supporting_reasons %}<li>{{ reason }}</li>{% else %}<li>目前沒有足夠支持資料</li>{% endfor %}</ul></section>
       <section><h3>反對這項建議</h3><ul>{% for reason in recommendation.risk_reasons %}<li>{{ reason }}</li>{% endfor %}</ul></section>

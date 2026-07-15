@@ -1,31 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="2500" height="1686" viewBox="0 0 2500 1686" role="img" aria-label="Stock Papi LINE 圖文選單六格設計稿">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="2500" height="1686" viewBox="0 0 2500 1686" role="img" aria-label="ABSORB LINE 圖文選單六格設計稿">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#fffdf8"/>
-      <stop offset="1" stop-color="#f6efe6"/>
-    </linearGradient>
-    <linearGradient id="tileA" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#fff4ea"/>
-    </linearGradient>
-    <linearGradient id="tileB" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#f8f1ff"/>
-    </linearGradient>
     <style>
-      .brand{font:700 72px "Lora","Noto Serif TC","Microsoft JhengHei",serif;fill:#2a211b;letter-spacing:2px}
-      .label{font:800 132px "Noto Serif TC","Microsoft JhengHei",serif;fill:#2a211b}
-      .hint{font:700 48px "Noto Serif TC","Microsoft JhengHei",serif;fill:#74685d}
-      .code{font:700 68px "Lora","Noto Serif TC","Microsoft JhengHei",serif;fill:#2a211b}
-      .tileA{fill:url(#tileA);stroke:#dbcdbd;stroke-width:5}
-      .tileB{fill:url(#tileB);stroke:#dbcdbd;stroke-width:5}
-      .pillMint{fill:#7fd7c4}
-      .pillApricot{fill:#f4b58a}
-      .pillLavender{fill:#b8a6ea}
+      .brand{font:800 72px "Segoe UI","Noto Sans TC","Microsoft JhengHei",sans-serif;fill:#122643;letter-spacing:6px}
+      .label{font:800 132px "Noto Sans TC","Microsoft JhengHei",sans-serif;fill:#152033}
+      .hint{font:700 48px "Noto Sans TC","Microsoft JhengHei",sans-serif;fill:#586579}
+      .code{font:700 68px "Segoe UI","Noto Sans TC","Microsoft JhengHei",sans-serif;fill:#ffffff}
+      .tileA{fill:#ffffff;stroke:#d9e0e8;stroke-width:5}
+      .tileB{fill:#eaf0f7;stroke:#d9e0e8;stroke-width:5}
+      .pillMint,.pillApricot,.pillLavender{fill:#122643}
     </style>
   </defs>
-  <rect width="2500" height="1686" fill="url(#bg)"/>
-  <text class="brand" x="86" y="100">STOCK PAPI</text>
+  <rect width="2500" height="1686" fill="#ffffff"/>
+  <image x="42" y="12" width="96" height="96" xlink:href="../static/brand/absorb-mark-128.png"/>
+  <text class="brand" x="158" y="88">ABSORB</text>
   <g transform="translate(42 132)">
     <rect class="tileA" x="0" y="0" width="790" height="710" rx="46"/>
     <rect class="tileB" x="810" y="0" width="790" height="710" rx="46"/>

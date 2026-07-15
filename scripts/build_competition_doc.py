@@ -9,7 +9,7 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
 
-OUTPUT = Path("deliverables/stock-papi-ai-investment-competition-intro.docx")
+OUTPUT = Path("deliverables/absorb-ai-investment-competition-intro.docx")
 
 
 BLACK = RGBColor(0, 0, 0)
@@ -119,7 +119,7 @@ def add_heading(doc, text, level):
 def add_header_footer(section):
     header = section.header.paragraphs[0]
     set_para(header, before=0, after=0, line=1.0, align=WD_ALIGN_PARAGRAPH.LEFT)
-    run = header.add_run("Stock Papi | AI 投資競賽專案介紹")
+    run = header.add_run("ABSORB | AI 投資競賽專案介紹")
     set_run_font(run, size=9, color=MUTED, bold=False)
 
     footer = section.footer.paragraphs[0]
@@ -144,7 +144,7 @@ def build():
 
     title = doc.add_paragraph()
     set_para(title, before=0, after=3, line=1.0, align=WD_ALIGN_PARAGRAPH.CENTER)
-    run = title.add_run("Stock Papi")
+    run = title.add_run("ABSORB")
     set_run_font(run, size=24, color=BLACK, bold=False)
 
     subtitle = doc.add_paragraph()
@@ -159,7 +159,7 @@ def build():
 
     add_text(
         doc,
-        "Stock Papi 是一個以 LINE 為入口、以 Web 為分析主場的 AI 量化投資助手，目標使用者是希望理解市場、但尚未具備完整財務工程背景的投資新手。專案把複雜的技術指標、五日方向模型、新聞與輿論情緒、法人籌碼與歷史回測整理成易讀的互動介面，降低研究門檻，同時保留足夠的可驗證數據支撐。",
+        "ABSORB 是一個以 LINE 為入口、以 Web 為分析主場的 AI 量化投資助手，目標使用者是希望理解市場、但尚未具備完整財務工程背景的投資新手。專案把複雜的技術指標、五日方向模型、新聞與輿論情緒、法人籌碼與歷史回測整理成易讀的互動介面，降低研究門檻，同時保留足夠的可驗證數據支撐。",
         size=11,
         color=BLACK,
         before=0,
@@ -289,7 +289,7 @@ def build():
     add_heading(doc, "十、結論", 1)
     add_text(
         doc,
-        "Stock Papi 的核心價值不只是『用 AI 幫你看股票』，而是把原本分散在行情、新聞、籌碼、回測與提醒之間的投資研究流程，整合成一個從查詢、理解到追蹤都可持續使用的產品體驗。對 AI 投資競賽而言，這個專案展示的是技術可行性、產品落地能力與資源受限條件下的系統設計能力，而不只是單次模型分數。",
+        "ABSORB 的核心價值不只是『用 AI 幫你看股票』，而是把原本分散在行情、新聞、籌碼、回測與提醒之間的投資研究流程，整合成一個從查詢、理解到追蹤都可持續使用的產品體驗。對 AI 投資競賽而言，這個專案展示的是技術可行性、產品落地能力與資源受限條件下的系統設計能力，而不只是單次模型分數。",
         after=10,
     )
 

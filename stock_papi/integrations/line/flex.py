@@ -4,6 +4,12 @@ from stock_papi.shared.formatting import format_sentiment_summary as _format_sen
 from stock_papi.services.recommendation_engine import recommend_analysis
 
 
+ABSORB_NAVY = "#122643"
+ABSORB_INK = "#172033"
+ABSORB_MUTED = "#5F6B7A"
+ABSORB_SURFACE = "#FFFFFF"
+
+
 def build_stock_flex_message(code, name, data, url, watched=False):
     color_prob = "#10b981" if data['prob'] >= 50 else "#ef4444"
     color_s = "#10b981" if data['s_score'] >= 50 else "#ef4444"
@@ -117,9 +123,13 @@ def build_stock_flex_message(code, name, data, url, watched=False):
         "header": {
             "type": "box",
             "layout": "vertical",
-            "backgroundColor": "#1e293b",
+            "backgroundColor": ABSORB_NAVY,
             "paddingAll": "20px",
             "contents": [
+                {
+                    "type": "text", "text": "ABSORB", "color": "#FFFFFF",
+                    "weight": "bold", "size": "xs",
+                },
                 {
                     "type": "text",
                     "text": f"📊 {name} ({code})",
@@ -174,7 +184,7 @@ def build_stock_flex_message(code, name, data, url, watched=False):
                 {
                     "type": "button",
                     "style": "primary",
-                    "color": "#39c6a3",
+                    "color": ABSORB_NAVY,
                     "action": {
                         "type": "uri",
                         "label": "查看完整分析",
@@ -237,7 +247,7 @@ def _watchlist_card(item, snapshot, base_url):
                 {"type": "button", "style": "secondary", "action": {
                     "type": "postback", "label": "設定提醒", "data": f"alert:menu:{code}",
                 }},
-                {"type": "button", "style": "primary", "color": "#39c6a3", "action": {
+                {"type": "button", "style": "primary", "color": ABSORB_NAVY, "action": {
                     "type": "uri", "label": "查看完整分析",
                     "uri": f"{base_url.rstrip('/')}/stock/{code}",
                 }},
@@ -281,7 +291,7 @@ def _alert_management_card(alert):
         "body": {
             "type": "box", "layout": "vertical", "paddingAll": "18px", "spacing": "sm",
             "contents": [
-                {"type": "text", "text": "提醒管理", "weight": "bold", "size": "sm", "color": "#39c6a3"},
+                {"type": "text", "text": "提醒管理", "weight": "bold", "size": "sm", "color": ABSORB_NAVY},
                 {"type": "text", "text": f"{alert['name']} ({alert['code']})", "weight": "bold", "size": "lg", "wrap": True},
                 {"type": "text", "text": _alert_condition_text(alert), "color": "#64748b", "size": "sm", "wrap": True},
             ],
@@ -369,7 +379,7 @@ def _signal_card(item, base_url):
         },
         "footer": {
             "type": "box", "layout": "vertical", "paddingAll": "14px",
-            "contents": [{"type": "button", "style": "primary", "color": "#39c6a3", "action": {
+            "contents": [{"type": "button", "style": "primary", "color": ABSORB_NAVY, "action": {
                 "type": "uri", "label": "查看完整分析",
                 "uri": f"{base_url.rstrip('/')}/stock/{code}",
             }}],
@@ -408,9 +418,9 @@ def build_alert_push_flex(hits, base_url):
         return {
             "type": "bubble", "size": "kilo",
             "header": {
-                "type": "box", "layout": "vertical", "backgroundColor": "#081321",
+                "type": "box", "layout": "vertical", "backgroundColor": ABSORB_NAVY,
                 "paddingAll": "16px", "contents": [{
-                    "type": "text", "text": "🔔 股票提醒", "color": "#39c6a3",
+                    "type": "text", "text": "ABSORB 股票提醒", "color": "#FFFFFF",
                     "weight": "bold", "size": "sm",
                 }],
             },
@@ -425,7 +435,7 @@ def build_alert_push_flex(hits, base_url):
             },
             "footer": {
                 "type": "box", "layout": "vertical", "paddingAll": "14px",
-                "contents": [{"type": "button", "style": "primary", "color": "#39c6a3", "action": {
+                "contents": [{"type": "button", "style": "primary", "color": ABSORB_NAVY, "action": {
                     "type": "uri", "label": "查看完整分析",
                     "uri": f"{base_url.rstrip('/')}/stock/{quote['code']}",
                 }}],
@@ -435,28 +445,28 @@ def build_alert_push_flex(hits, base_url):
     return {"type": "carousel", "contents": [bubble(hit) for hit in hits]}
 
 
-def build_line_summary_card(title, lines, cta_label, url, accent="#39c6a3", action=None):
+def build_line_summary_card(title, lines, cta_label, url, accent=ABSORB_NAVY, action=None):
     """建立只有一個主要動作的 LINE 摘要卡。"""
     action = action or {"type": "uri", "label": cta_label, "uri": url}
     return {
         "type": "bubble",
         "size": "kilo",
         "header": {
-            "type": "box", "layout": "vertical", "backgroundColor": "#081321",
+            "type": "box", "layout": "vertical", "backgroundColor": ABSORB_NAVY,
             "paddingAll": "16px", "contents": [{
-                "type": "text", "text": "AI QUANT", "color": accent,
+                "type": "text", "text": "ABSORB", "color": "#FFFFFF",
                 "size": "xs", "weight": "bold",
             }],
         },
         "body": {
-            "type": "box", "layout": "vertical", "backgroundColor": "#0d1a2b",
+            "type": "box", "layout": "vertical", "backgroundColor": ABSORB_SURFACE,
             "paddingAll": "18px", "spacing": "md", "contents": [
-                {"type": "text", "text": title, "color": "#eef6ff", "size": "lg", "weight": "bold", "wrap": True},
-                *[{"type": "text", "text": line, "color": "#8fa4bd", "size": "sm", "wrap": True} for line in lines],
+                {"type": "text", "text": title, "color": ABSORB_INK, "size": "lg", "weight": "bold", "wrap": True},
+                *[{"type": "text", "text": line, "color": ABSORB_MUTED, "size": "sm", "wrap": True} for line in lines],
             ],
         },
         "footer": {
-            "type": "box", "layout": "vertical", "backgroundColor": "#0d1a2b",
+            "type": "box", "layout": "vertical", "backgroundColor": ABSORB_SURFACE,
             "paddingAll": "14px", "contents": [{
                 "type": "button", "style": "primary", "color": accent,
                 "action": action,
@@ -503,33 +513,34 @@ def build_welcome_flex():
         "header": {
             "type": "box",
             "layout": "vertical",
-            "backgroundColor": "#0f172a",
+            "backgroundColor": ABSORB_NAVY,
             "paddingAll": "20px",
             "contents": [
-                { "type": "text", "text": "🤖 AI 選股助理", "color": "#38bdf8", "weight": "bold", "size": "xl" }
+                { "type": "text", "text": "ABSORB", "color": "#FFFFFF", "weight": "bold", "size": "xl" },
+                { "type": "text", "text": "AI 量化市場情報與決策輔助", "color": "#DCE6F2", "size": "sm", "wrap": True }
             ]
         },
         "body": {
             "type": "box",
             "layout": "vertical",
-            "backgroundColor": "#1e293b",
+            "backgroundColor": ABSORB_SURFACE,
             "paddingAll": "20px",
             "spacing": "md",
             "contents": [
-                { "type": "text", "text": "歡迎使用 AI 量化投資預測！", "color": "#f8fafc", "size": "md", "weight": "bold", "wrap": True },
-                { "type": "text", "text": "您可以：\n1️⃣ 點擊下方選單選擇有興趣的【產業】\n2️⃣ 直接輸入【股票代碼】(如 2330)\n3️⃣ 輸入【大盤】查看今日走勢", "color": "#94a3b8", "size": "sm", "wrap": True, "margin": "md" }
+                { "type": "text", "text": "以市場、產業與個股資料形成可驗證的研究展望。", "color": ABSORB_INK, "size": "md", "weight": "bold", "wrap": True },
+                { "type": "text", "text": "您可以：\n1️⃣ 點擊下方選單選擇有興趣的【產業】\n2️⃣ 直接輸入【股票代碼】(如 2330)\n3️⃣ 輸入【大盤】查看今日走勢\n4️⃣ 直接用自然中文提出研究問題", "color": ABSORB_MUTED, "size": "sm", "wrap": True, "margin": "md" }
             ]
         },
         "footer": {
             "type": "box",
             "layout": "vertical",
-            "backgroundColor": "#1e293b",
+            "backgroundColor": ABSORB_SURFACE,
             "paddingAll": "16px",
             "contents": [
                 {
                     "type": "button",
-                    "style": "secondary",
-                    "color": "#334155",
+                    "style": "primary",
+                    "color": ABSORB_NAVY,
                     "action": { "type": "message", "label": "🎓 新手怎麼看？(教學)", "text": "新手教學" }
                 }
             ]
@@ -544,16 +555,16 @@ def build_tutorial_flex():
         "header": {
             "type": "box",
             "layout": "vertical",
-            "backgroundColor": "#6366f1",
+            "backgroundColor": ABSORB_NAVY,
             "paddingAll": "20px",
             "contents": [
-                { "type": "text", "text": "🎓 新手快速上手指南", "color": "#ffffff", "weight": "bold", "size": "xl" }
+                { "type": "text", "text": "ABSORB 新手快速上手指南", "color": "#ffffff", "weight": "bold", "size": "xl", "wrap": True }
             ]
         },
         "body": {
             "type": "box",
             "layout": "vertical",
-            "backgroundColor": "#f8fafc",
+            "backgroundColor": ABSORB_SURFACE,
             "paddingAll": "20px",
             "spacing": "md",
             "contents": [

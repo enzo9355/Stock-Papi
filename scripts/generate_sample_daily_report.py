@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("output/pdf/stock-papi-tw-industry-daily-SAMPLE-2026-07-03.pdf"),
+        default=Path("output/pdf/absorb-tw-industry-daily-SAMPLE-2026-07-03.pdf"),
     )
     args = parser.parse_args(argv)
     with tempfile.TemporaryDirectory() as temporary:

@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}{{ report.report_date }} 每日報告｜Stock Papi{% endblock %}
+{% block title %}{{ report.report_date }} 每日報告｜ABSORB{% endblock %}
 {% block nav_reports %}active{% endblock %}
 {% block content %}
 <article class="page report-detail-page">
   <header class="report-hero panel">
     <a class="back-link" href="{{ url_for('reports_page') }}">返回每日報告</a>
     <p class="eyebrow">{{ report.report_date }} · TW INDUSTRY</p>
-    <h1>Stock Papi 台股產業量化分析日報</h1>
+    <h1>ABSORB 台股產業量化分析日報</h1>
     <p class="muted">資料截止日 {{ report.data_as_of }} · 資料覆蓋率 {{ '%.1f%%'|format(report.coverage * 100) }}</p>
   </header>
 

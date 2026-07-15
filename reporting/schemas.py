@@ -119,7 +119,7 @@ class ReportMetadataV2:
         )
         return {
             "schema_version": 2,
-            "kind": "stock-papi-report",
+            "kind": "absorb-report",
             "report_type": self.report_type,
             "market": self.market,
             "source_market_date": self.source_market_date.isoformat(),

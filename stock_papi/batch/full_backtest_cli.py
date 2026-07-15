@@ -26,8 +26,8 @@ def _write_atomic(path, document):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Stock Papi resumable full backtest")
-    parser.add_argument("--root", type=Path, default=Path(r"D:\StockPapiData"))
+    parser = argparse.ArgumentParser(description="ABSORB resumable full backtest")
+    parser.add_argument("--root", type=Path, default=Path(r"D:\AbsorbData"))
     parser.add_argument("--max-items", type=int, default=25)
     args = parser.parse_args(argv)
 

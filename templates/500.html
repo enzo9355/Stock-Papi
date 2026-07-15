@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}系統暫時無法處理｜ABSORB{% endblock %}
+{% block content %}
+<section class="error-state" aria-labelledby="server-error-title">
+  <p class="eyebrow">ABSORB</p>
+  <h1 id="server-error-title">系統暫時無法處理</h1>
+  <p>沒有執行任何新的寫入操作。請稍後重試，固定 LINE 指令仍可獨立使用。</p>
+  <a class="button button-primary" href="{{ url_for('dashboard_page') }}">回到市場總覽</a>
+</section>
+{% endblock %}

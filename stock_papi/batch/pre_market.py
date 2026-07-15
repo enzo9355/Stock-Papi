@@ -81,7 +81,7 @@ class PreMarketPipeline:
         digest = receipt.get("metadata_sha256")
         if (
             metadata.get("schema_version") != 2
-            or metadata.get("kind") != "stock-papi-report"
+            or metadata.get("kind") not in {"absorb-report", "stock-papi-report"}
             or metadata.get("report_type") != "post_close"
             or metadata.get("market") != "TW"
             or metadata.get("applicable_trading_date")
@@ -195,7 +195,7 @@ class PreMarketPipeline:
                             "source_manifest_sha256"
                         ],
                         "model_versions": base_metadata["model_versions"],
-                        "title": "Stock Papi 台股盤前快報",
+                        "title": "ABSORB 台股盤前快報",
                         "summary": [message],
                         "warnings": (
                             []

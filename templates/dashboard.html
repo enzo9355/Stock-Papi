@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}市場首頁｜Stock Papi{% endblock %}
+{% block title %}市場首頁｜ABSORB{% endblock %}
 {% block nav_dashboard %}active{% endblock %}
 {% block content %}
 <div class="page dashboard-page" data-dashboard-endpoint="/api/dashboard">
@@ -47,6 +47,23 @@
         <a href="#industry-forecast">產業機會</a>
       </div>
     </div>
+  </section>
+
+  <section class="panel conversation-panel" aria-labelledby="conversation-title" data-conversation-endpoint="/api/conversation">
+    <div class="section-heading">
+      <div><p class="eyebrow">ABSORB RESEARCH</p><h2 id="conversation-title">直接問市場、產業或股票</h2></div>
+      <span class="muted small">回答以系統可驗證資料為準</span>
+    </div>
+    <div class="conversation-log" data-conversation-log aria-live="polite">
+      <p class="empty-state">例如：「台積電現在能不能追高？」或「今天哪些產業正在轉強？」</p>
+    </div>
+    <form class="conversation-form" data-conversation-form>
+      <label for="conversation-question">研究問題</label>
+      <div class="conversation-control">
+        <input id="conversation-question" name="question" maxlength="1200" autocomplete="off" placeholder="輸入一般自然語言問題" required>
+        <button type="submit">詢問 ABSORB</button>
+      </div>
+    </form>
   </section>
 
   <section class="panel pulse-panel" id="market-pulse" aria-labelledby="market-title">

@@ -42,7 +42,7 @@ def _write_atomic(path: Path, content: bytes) -> None:
 
 
 def _local_mirror_path(archive: Path, market: str, report_date: datetime.date) -> Path:
-    return Path(archive) / f"stock-papi-{market.lower()}-industry-daily-{report_date.isoformat()}.pdf"
+    return Path(archive) / f"absorb-{market.lower()}-industry-daily-{report_date.isoformat()}.pdf"
 
 
 def _mirror_matches(pdf_path: Path, sidecar_path: Path, pdf_sha256: str) -> bool:
@@ -178,7 +178,7 @@ def publish_report_v2(
     reports.sort(key=lambda item: item["published_at"], reverse=True)
     index = {
         "schema_version": 2,
-        "kind": "stock-papi-report-index",
+        "kind": "absorb-report-index",
         "market": "TW",
         "updated_at": document["published_at"],
         "reports": reports[: settings.index_history_days * 3],
@@ -188,7 +188,7 @@ def publish_report_v2(
         raise ReportPublishError("report v2 index exceeds size limit")
     latest = {
         "schema_version": 2,
-        "kind": "stock-papi-report",
+        "kind": "absorb-report",
         "market": "TW",
         "report_type": document["report_type"],
         "source_market_date": document["source_market_date"],
@@ -300,7 +300,7 @@ def publish_report(
         "kind": "daily-industry-report",
         "market": "TW",
         "report_date": report.report_date.isoformat(),
-        "title": "Stock Papi 台股產業量化分析日報",
+        "title": "ABSORB 台股產業量化分析日報",
         "generated_at": result.generated_at.isoformat().replace("+00:00", "Z"),
         "data_as_of": manifest.market_as_of.isoformat(),
         "source_manifest": f"quant/v1/{manifest.manifest_path}",

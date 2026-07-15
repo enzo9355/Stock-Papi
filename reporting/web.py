@@ -100,7 +100,7 @@ def _validate_report_index_v2(document: dict, settings: ReportConfig) -> list[di
     reports = document.get("reports")
     if (
         document.get("schema_version") != 2
-        or document.get("kind") != "stock-papi-report-index"
+        or document.get("kind") not in {"absorb-report-index", "stock-papi-report-index"}
         or document.get("market") != "TW"
         or not isinstance(reports, list)
         or len(reports) > settings.index_history_days * 3
@@ -252,7 +252,6 @@ def validate_report_metadata(content: bytes, item: dict) -> dict:
 def _validate_report_metadata_v2(document: dict, item: dict) -> dict:
     expected = {
         "schema_version": 2,
-        "kind": "stock-papi-report",
         "market": "TW",
         "report_type": item["report_type"],
         "source_market_date": item["source_market_date"],
@@ -264,6 +263,8 @@ def _validate_report_metadata_v2(document: dict, item: dict) -> dict:
         "summary": item["summary"],
         "content_sha256": item["content_sha256"],
     }
+    if document.get("kind") not in {"absorb-report", "stock-papi-report"}:
+        raise ReportWebError("報告 metadata v2 品牌 schema 不合法")
     if any(document.get(key) != value for key, value in expected.items()):
         raise ReportWebError("報告 metadata v2 與索引不一致")
     content = document.get("content")

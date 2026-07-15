@@ -178,7 +178,7 @@ class WebProductTests(unittest.TestCase):
             missing = client.get("/search?q=不存在股票", follow_redirects=True)
 
         self.assertEqual(root.status_code, 200)
-        self.assertIn("Stock Papi", root.get_data(as_text=True))
+        self.assertIn("ABSORB", root.get_data(as_text=True))
         self.assertEqual(found.status_code, 302)
         self.assertTrue(found.headers["Location"].endswith("/stock/2330"))
         self.assertIn("找不到", missing.get_data(as_text=True))
@@ -189,17 +189,18 @@ class WebProductTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("找不到", response.get_data(as_text=True))
 
-    def test_base_shell_uses_stock_papi_brand_and_light_theme(self):
+    def test_base_shell_uses_absorb_brand_and_light_theme(self):
         response = stock_app.app.test_client().get("/dashboard")
         html = response.get_data(as_text=True)
         css = Path(stock_app.app.static_folder, "app.css").read_text(encoding="utf-8")
 
-        self.assertIn("Stock Papi", html)
+        self.assertIn("ABSORB", html)
+        self.assertIn('alt="ABSORB logo"', html)
         self.assertIn("今天市場", html)
         self.assertIn("使用 LINE 登入", html)
         self.assertNotIn("fonts.googleapis.com", html)
-        self.assertIn("GenWanMin", css)
-        self.assertIn("--bg:#f6efe6", css)
+        self.assertIn("--absorb-navy:#122643", css)
+        self.assertIn("--absorb-canvas:#f7f9fc", css)
         self.assertIn(".glass-panel", css)
         self.assertNotIn("量化觀測站", html)
 
@@ -218,7 +219,7 @@ class WebProductTests(unittest.TestCase):
         self.assertIn("integrity=\"sha384-", stock_html)
         self.assertNotIn("style=", stock_html)
 
-    def test_dashboard_page_is_the_stock_papi_landing_page(self):
+    def test_dashboard_page_is_the_absorb_research_dashboard(self):
         with patch.object(stock_app, "analyze") as analyze:
             response = stock_app.app.test_client().get("/dashboard")
 
@@ -387,7 +388,7 @@ class WebProductTests(unittest.TestCase):
             'id="backtest"',
             'id="sentiment"',
             'data-news-filter="positive"',
-            "Papi 判讀",
+            "ABSORB 判讀",
             "情緒動能",
             "最大回撤",
             "資料日 2026-07-03",
@@ -448,7 +449,7 @@ class WebProductTests(unittest.TestCase):
             self.assertNotIn(old_label, svg)
         for emoji in ["📈", "⭐", "🏭", "🔔", "🧮", "📊"]:
             self.assertNotIn(emoji, svg)
-        for marker in ["STOCK PAPI", "#f6efe6", "#7fd7c4", "#f4b58a", "#b8a6ea"]:
+        for marker in ["ABSORB", "#122643", "#ffffff", "#eaf0f7"]:
             self.assertIn(marker, svg)
         self.assertIn('font:800 132px', svg)
         self.assertIn('font:700 48px', svg)

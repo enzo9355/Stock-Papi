@@ -58,7 +58,7 @@ class DailyReportPublishTests(unittest.TestCase):
                 index["reports"][0]["market_action"],
                 metadata["public_report"]["market_recommendation"]["action"],
             )
-            mirror = root / "reports" / "TW" / "stock-papi-tw-industry-daily-2026-07-03.pdf"
+            mirror = root / "reports" / "TW" / "absorb-tw-industry-daily-2026-07-03.pdf"
             self.assertEqual(mirror.read_bytes(), pdf.read_bytes())
             self.assertEqual(
                 json.loads(mirror.with_suffix(".json").read_text(encoding="utf-8")),
@@ -77,7 +77,7 @@ class DailyReportPublishTests(unittest.TestCase):
             result = ReportGenerationResult.from_path(pdf, report.report_date, page_count=7, warnings=[])
 
             publish_report(root, report, result)
-            mirror = root / "reports" / "TW" / "stock-papi-tw-industry-daily-2026-07-03.pdf"
+            mirror = root / "reports" / "TW" / "absorb-tw-industry-daily-2026-07-03.pdf"
             sidecar = mirror.with_suffix(".json")
             before = (mirror.read_bytes(), sidecar.read_bytes(), mirror.stat().st_mtime_ns, sidecar.stat().st_mtime_ns)
 
@@ -102,7 +102,7 @@ class DailyReportPublishTests(unittest.TestCase):
                 first, report.report_date, page_count=7, warnings=[]
             )
             publisher.publish_report(root, report, publish_result)
-            mirror = root / "reports" / "TW" / "stock-papi-tw-industry-daily-2026-07-03.pdf"
+            mirror = root / "reports" / "TW" / "absorb-tw-industry-daily-2026-07-03.pdf"
             sidecar = mirror.with_suffix(".json")
             before = (mirror.read_bytes(), sidecar.read_bytes())
             second = root / "second.pdf"
@@ -194,7 +194,7 @@ class DailyReportPublishTests(unittest.TestCase):
             index = json.loads((publish / "index-TW.json").read_text(encoding="utf-8"))
             self.assertEqual(len(index["reports"]), 1)
             self.assertEqual(index["reports"][0]["pdf_sha256"], second_result.sha256)
-            mirror = root / "reports" / "TW" / "stock-papi-tw-industry-daily-2026-07-03.pdf"
+            mirror = root / "reports" / "TW" / "absorb-tw-industry-daily-2026-07-03.pdf"
             self.assertEqual(mirror.read_bytes(), second.read_bytes())
             self.assertTrue((publish / f"objects/{hashlib.sha256(first.read_bytes()).hexdigest()}.pdf").is_file())
 

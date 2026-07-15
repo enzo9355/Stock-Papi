@@ -40,7 +40,7 @@ class QualityGateReport:
 
     def to_markdown(self) -> str:
         lines = [
-            "# Stock Papi 發布品質閘門報告",
+            "# ABSORB 發布品質閘門報告",
             "",
             f"- 結論：**{self.status.value}**",
             f"- 產生時間：{self.generated_at.isoformat()}",

@@ -25,7 +25,7 @@ def metadata(report_type):
         "source_manifest": "quant/v1/manifests/TW-20260714T090000Z-aaaaaaaaaaaa.json",
         "source_manifest_sha256": "a" * 64,
         "model_versions": {"lgbm-5d-v1": 2000},
-        "title": "Stock Papi 台股盤後報告" if report_type == "post_close" else "Stock Papi 台股盤前快報",
+        "title": "ABSORB 台股盤後報告" if report_type == "post_close" else "ABSORB 台股盤前快報",
         "summary": ["市場維持整理"],
         "warnings": [],
         "content": {"market_action": "控制追價", "industries": ["半導體"]},
@@ -76,8 +76,10 @@ class ReportSchemaV2Tests(unittest.TestCase):
             publish = root / "publish" / "reports" / "v2"
             index_bytes = (publish / "index-TW.json").read_bytes()
             reports = validate_report_index(index_bytes)
+            index_document = json.loads(index_bytes)
 
             self.assertEqual(len(reports), 2)
+            self.assertEqual(index_document["kind"], "absorb-report-index")
             self.assertEqual(
                 {item["report_type"] for item in reports}, {"post_close", "pre_market"}
             )
@@ -85,7 +87,35 @@ class ReportSchemaV2Tests(unittest.TestCase):
             self.assertNotIn("pdf_path", pre_market)
             content = (publish / pre_market["metadata"]).read_bytes()
             document = validate_report_metadata(content, pre_market)
+            self.assertEqual(document["kind"], "absorb-report")
             self.assertEqual(document["applicable_trading_date"], "2026-07-15")
+
+    def test_v2_reader_accepts_legacy_kind_during_migration(self):
+        document = metadata("pre_market")
+        document["kind"] = "stock-papi-report"
+        canonical_content = json.dumps(
+            document["content"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        document["content_sha256"] = hashlib.sha256(canonical_content).hexdigest()
+        content = json.dumps(document, ensure_ascii=False).encode("utf-8")
+        digest = hashlib.sha256(content).hexdigest()
+        entry = {
+            key: document[key]
+            for key in (
+                "report_type", "market", "source_market_date",
+                "applicable_trading_date", "published_at", "data_as_of",
+                "model_versions", "title", "summary", "content_sha256",
+            )
+        }
+        entry["metadata"] = f"metadata/{digest}.json"
+        entry["metadata_sha256"] = digest
+
+        validated = validate_report_metadata(content, entry)
+
+        self.assertEqual(validated["kind"], "stock-papi-report")
 
     def test_v2_duplicate_is_idempotent_and_conflicting_content_preserves_index(self):
         with tempfile.TemporaryDirectory() as temporary:

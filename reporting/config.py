@@ -5,20 +5,20 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class ReportTheme:
-    """集中管理 Stock Papi PDF 視覺設定。"""
+    """集中管理 ABSORB PDF 視覺設定。"""
 
-    background: str = "#f6efe6"
-    surface: str = "#fffaf4"
-    surface_secondary: str = "#fff4ea"
-    line: str = "#dbcdbd"
-    text: str = "#2a211b"
-    muted: str = "#74685d"
-    mint: str = "#7fd7c4"
-    apricot: str = "#f4b58a"
-    lavender: str = "#b8a6ea"
-    up: str = "#d94b63"
-    down: str = "#1f9a72"
-    warning: str = "#c98542"
+    background: str = "#f7f9fc"
+    surface: str = "#ffffff"
+    surface_secondary: str = "#fbfcfe"
+    line: str = "#d9e0e8"
+    text: str = "#152033"
+    muted: str = "#586579"
+    mint: str = "#122643"
+    apricot: str = "#8a5b00"
+    lavender: str = "#245b91"
+    up: str = "#b53a4c"
+    down: str = "#18704a"
+    warning: str = "#8a5b00"
     margin_mm: float = 14.0
     chart_width_in: float = 7.0
     chart_height_in: float = 3.2
@@ -36,7 +36,7 @@ def _environment_path(name: str) -> Path | None:
 class ReportConfig:
     """日報驗證、分析、回測與輸出的集中設定。"""
 
-    root: Path = Path(r"D:\StockPapiData")
+    root: Path = Path(r"D:\AbsorbData")
     market: str = "TW"
     font_path: Path | None = field(default_factory=lambda: _environment_path("REPORT_FONT_PATH"))
     bold_font_path: Path | None = field(

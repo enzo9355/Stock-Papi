@@ -206,8 +206,8 @@ def _execute(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Stock Papi verified report backfill")
-    parser.add_argument("--root", type=Path, default=Path(r"D:\StockPapiData"))
+    parser = argparse.ArgumentParser(description="ABSORB verified report backfill")
+    parser.add_argument("--root", type=Path, default=Path(r"D:\AbsorbData"))
     parser.add_argument("--market", choices=("TW",), default="TW")
     parser.add_argument("--report-type", choices=("post_close", "pre_market"), required=True)
     parser.add_argument("--source-market-date", type=datetime.date.fromisoformat, required=True)

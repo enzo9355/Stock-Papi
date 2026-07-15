@@ -61,8 +61,8 @@ def _status(
 
 def main(argv: list[str] | None = None) -> int:
     """執行本地台股日報驗證、生成與正式發布。"""
-    parser = argparse.ArgumentParser(description="Stock Papi 台股產業量化分析日報")
-    parser.add_argument("--root", type=Path, default=Path(r"D:\StockPapiData"))
+    parser = argparse.ArgumentParser(description="ABSORB 台股產業量化分析日報")
+    parser.add_argument("--root", type=Path, default=Path(r"D:\AbsorbData"))
     parser.add_argument("--market", choices=("TW",), default="TW")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--font-path", type=Path)
@@ -120,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         output_dir = args.output_dir or (root / "reports" / args.market)
-        filename = f"stock-papi-{args.market.lower()}-industry-daily-{report_date}.pdf"
+        filename = f"absorb-{args.market.lower()}-industry-daily-{report_date}.pdf"
         output = output_dir / ".staging" / filename
         generation = DailyIndustryReportGenerator(config).generate(report, output)
         if not generation.success:

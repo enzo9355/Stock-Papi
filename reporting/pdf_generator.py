@@ -35,7 +35,7 @@ def _delta(value, *, percent=False):
 
 
 class DailyIndustryReportGenerator:
-    """在 Windows 本地生成並驗證 Stock Papi 台股產業日報。"""
+    """在 Windows 本地生成並驗證 ABSORB 台股產業日報。"""
 
     def __init__(self, config: ReportConfig) -> None:
         self.config = config
@@ -143,9 +143,9 @@ class DailyIndustryReportGenerator:
                 )
             ).encode("utf-8")
         ).hexdigest()[:10]
-        regular_font = f"StockPapiSans-{font_key}"
-        bold_font = f"StockPapiSansBold-{font_key}"
-        title_font = f"StockPapiSerif-{font_key}"
+        regular_font = f"AbsorbSans-{font_key}"
+        bold_font = f"AbsorbSansBold-{font_key}"
+        title_font = f"AbsorbSerif-{font_key}"
         for name, path in (
             (regular_font, self.config.font_path),
             (bold_font, self.config.bold_font_path),
@@ -156,7 +156,7 @@ class DailyIndustryReportGenerator:
 
         styles = getSampleStyleSheet()
         body = ParagraphStyle(
-            "StockPapiBody",
+            "AbsorbBody",
             parent=styles["BodyText"],
             fontName=regular_font,
             fontSize=theme.body_font_size,
@@ -165,14 +165,14 @@ class DailyIndustryReportGenerator:
             spaceAfter=4,
         )
         small = ParagraphStyle(
-            "StockPapiSmall",
+            "AbsorbSmall",
             parent=body,
             fontSize=theme.small_font_size,
             leading=theme.small_font_size * 1.45,
             textColor=colors.HexColor(theme.muted),
         )
         heading = ParagraphStyle(
-            "StockPapiHeading",
+            "AbsorbHeading",
             parent=body,
             fontName=title_font,
             fontSize=theme.heading_font_size,
@@ -183,7 +183,7 @@ class DailyIndustryReportGenerator:
             keepWithNext=True,
         )
         subheading = ParagraphStyle(
-            "StockPapiSubheading",
+            "AbsorbSubheading",
             parent=body,
             fontName=bold_font,
             fontSize=11,
@@ -193,15 +193,15 @@ class DailyIndustryReportGenerator:
             keepWithNext=True,
         )
         cover_title = ParagraphStyle(
-            "StockPapiCover",
+            "AbsorbCover",
             parent=heading,
             fontSize=27,
             leading=34,
             alignment=TA_CENTER,
         )
-        centered = ParagraphStyle("StockPapiCentered", parent=body, alignment=TA_CENTER)
+        centered = ParagraphStyle("AbsorbCentered", parent=body, alignment=TA_CENTER)
         kpi = ParagraphStyle(
-            "StockPapiKpi", parent=body, fontName=bold_font, fontSize=12, leading=15, alignment=TA_CENTER
+            "AbsorbKpi", parent=body, fontName=bold_font, fontSize=12, leading=15, alignment=TA_CENTER
         )
 
         margin = theme.margin_mm * mm
@@ -212,8 +212,8 @@ class DailyIndustryReportGenerator:
             rightMargin=margin,
             topMargin=18 * mm,
             bottomMargin=16 * mm,
-            title="Stock Papi 台股產業量化分析日報",
-            author="Stock Papi",
+            title="ABSORB 台股產業量化分析日報",
+            author="ABSORB",
             subject=f"TW {report.report_date.isoformat()}",
         )
 
@@ -224,7 +224,7 @@ class DailyIndustryReportGenerator:
             canvas.rect(0, 0, width, height, fill=1, stroke=0)
             canvas.setFillColor(colors.HexColor(theme.text))
             canvas.setFont(bold_font, 8)
-            canvas.drawString(margin, height - 10 * mm, "Stock Papi")
+            canvas.drawString(margin, height - 10 * mm, "ABSORB")
             canvas.setFont(regular_font, 7)
             canvas.setFillColor(colors.HexColor(theme.muted))
             canvas.drawRightString(
@@ -313,7 +313,7 @@ class DailyIndustryReportGenerator:
                 paragraph("不得作為正式投資或模型結果", centered),
                 Spacer(1, 4 * mm),
             ]
-        story += [paragraph("Stock Papi", centered), Spacer(1, 4 * mm)]
+        story += [paragraph("ABSORB", centered), Spacer(1, 4 * mm)]
         story += [paragraph("台股產業量化分析日報", cover_title), Spacer(1, 6 * mm)]
         cover_rows = [
             ["報告交易日", report.report_date.isoformat()],

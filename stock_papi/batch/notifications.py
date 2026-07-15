@@ -53,7 +53,7 @@ class NotificationManager:
         else:
             document = {"schema_version": 1, "notification_key": key, "report_type": report_type, "content_sha256": content_sha256, "audience": audience, "public_url": public_url, "attempts": 0}
         labels = {"post_close": "盤後分析", "pre_market": "盤前更新", "weekly_model": "模型驗證週報"}
-        message = f"Stock Papi {labels[report_type]}\n" + ("\n".join(summary) + "\n" if summary else "") + public_url
+        message = f"ABSORB {labels[report_type]}\n" + ("\n".join(summary) + "\n" if summary else "") + public_url
         document["status"] = "pending"; _write_atomic(path, document)
         for _ in range(self.max_attempts - document["attempts"]):
             document["attempts"] += 1; _write_atomic(path, document)

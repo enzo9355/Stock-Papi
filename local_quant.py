@@ -84,9 +84,9 @@ def validate_data_root(path):
     if (
         path.drive.upper() != "D:"
         or path.parent != Path("D:/")
-        or path.name.lower() != "stockpapidata"
+        or path.name.lower() not in {"absorbdata", "stockpapidata"}
     ):
-        raise ValueError(r"data root must be D:\StockPapiData")
+        raise ValueError(r"data root must be D:\AbsorbData or the deprecated D:\StockPapiData")
     return path
 
 
@@ -618,7 +618,7 @@ def _fetch_json_list(url):
 
     response = requests.get(
         url,
-        headers={"User-Agent": "StockPapi/1.0 (public market research)"},
+        headers={"User-Agent": "ABSORB/1.0 (public market research)"},
         timeout=15,
     )
     response.raise_for_status()
@@ -773,7 +773,7 @@ def build_market_insights_document(root, pipeline, now=None, fetch_json=None, fe
         "mops": mops[:200],
         "etfs": etfs,
         "supply_chains": build_supply_chains(metrics),
-        "sources": [source for source, _url in MOPS_SOURCES] + ["yfinance", "Stock Papi local artifacts"],
+        "sources": [source for source, _url in MOPS_SOURCES] + ["yfinance", "ABSORB local artifacts"],
     }
 
 
@@ -1162,7 +1162,7 @@ def fetch_sec_us_universe_json():
     response = requests.get(
         SEC_US_UNIVERSE_URL,
         headers={
-            "User-Agent": "StockPapi/1.0 (https://github.com/enzo9355/Stock-Papi)"
+            "User-Agent": "ABSORB/1.0"
         },
         timeout=15,
     )
@@ -1216,7 +1216,7 @@ def fetch_nasdaq_us_universe_texts():
     for url in NASDAQ_US_UNIVERSE_URLS:
         response = requests.get(
             url,
-            headers={"User-Agent": "StockPapi/1.0"},
+            headers={"User-Agent": "ABSORB/1.0"},
             timeout=15,
             allow_redirects=False,
         )
@@ -1358,8 +1358,8 @@ def load_checkpoint(root, market="TW"):
 
 
 def main(argv=None, now=None, free_bytes=None):
-    parser = argparse.ArgumentParser(description="Stock Papi local quant runner")
-    parser.add_argument("--root", default=r"D:\StockPapiData")
+    parser = argparse.ArgumentParser(description="ABSORB local quant runner")
+    parser.add_argument("--root", default=r"D:\AbsorbData")
     parser.add_argument("--init", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--run", action="store_true")

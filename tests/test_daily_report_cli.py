@@ -63,7 +63,7 @@ class DailyReportCliTests(unittest.TestCase):
             ) as mocked_generate:
                 exit_code = main(["--root", str(root)])
 
-            filename = "stock-papi-tw-industry-daily-2026-07-03.pdf"
+            filename = "absorb-tw-industry-daily-2026-07-03.pdf"
             archive = root / "reports" / "TW"
             staged = archive / ".staging" / filename
             status = json.loads((root / "logs" / "report-status.json").read_text(encoding="utf-8"))

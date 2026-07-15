@@ -34,7 +34,7 @@ DEFAULT_HASH_TARGETS = (
 
 def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     """解析所有必須由 CI 提供的驗證 artifact。"""
-    parser = argparse.ArgumentParser(description="產生 Stock Papi 發布品質閘門報告")
+    parser = argparse.ArgumentParser(description="產生 ABSORB 發布品質閘門報告")
     parser.add_argument("--test-result", type=Path, required=True)
     parser.add_argument("--parity-result", type=Path, required=True)
     parser.add_argument("--coverage-result", type=Path, required=True)

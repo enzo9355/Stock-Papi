@@ -140,7 +140,7 @@ def build_weekly_model_report(
         "source_manifest": backtest["dataset_manifest"],
         "source_manifest_sha256": backtest["dataset_sha256"],
         "model_versions": {model_version: 1},
-        "title": f"Stock Papi 模型驗證週報 {week_id}",
+        "title": f"ABSORB 模型驗證週報 {week_id}",
         "summary": [
             f"成熟預測 {accuracy['matured']} 筆，方向準確率 {accuracy['accuracy']:.1%}",
             f"策略勝率 {metrics['strategy_win_rate']:.1%}，Brier {metrics['brier_score']:.3f}",

@@ -33,6 +33,8 @@ class ReleaseOperationsTests(unittest.TestCase):
             "publicAccessPrevention",
             "get-iam-policy",
             "stock-papi-line-channel-access-token",
+            "'D:\\AbsorbData'",
+            "'ABSORB-LocalQuant'",
             "latest-$Market.json",
             "overall = if ($Ready) { 'READY' } else { 'BLOCKED' }",
         ):

@@ -3,16 +3,31 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#f6efe6">
-  <title>{% block title %}Stock Papi{% endblock %}</title>
+  <meta name="theme-color" content="#122643">
+  <meta name="description" content="ABSORB AI 量化市場情報與決策輔助系統">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="ABSORB">
+  <meta property="og:title" content="ABSORB｜AI 量化市場情報與決策輔助">
+  <meta property="og:description" content="吸收市場資料、模型訊號與歷史驗證，形成清楚且可驗證的市場展望。">
+  <meta property="og:image" content="{{ url_for('static', filename='brand/social-preview-1200x630.png', _external=True) }}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ABSORB｜AI Market Intelligence">
+  <meta name="twitter:description" content="AI 量化市場情報與決策輔助系統">
+  <meta name="twitter:image" content="{{ url_for('static', filename='brand/social-preview-1200x630.png', _external=True) }}">
+  <title>{% block title %}ABSORB{% endblock %}</title>
+  <link rel="icon" href="{{ url_for('static', filename='brand/favicon.ico') }}" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='brand/favicon-32x32.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/apple-touch-icon.png') }}">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"ABSORB","applicationCategory":"FinanceApplication","operatingSystem":"Web, LINE","description":"AI 量化市場情報與決策輔助"}</script>
   {% block head %}{% endblock %}
 </head>
 <body>
   <a class="skip-link" href="#main-content">跳到主要內容</a>
   <div class="app-shell">
     <aside class="sidebar" aria-label="主要導覽">
-      <a class="brand" href="{{ url_for('dashboard_page') }}"><span class="brand-mark">SP</span><span>Stock Papi</span></a>
+      <a class="brand" href="{{ url_for('dashboard_page') }}"><img class="brand-mark" src="{{ url_for('static', filename='brand/absorb-mark-64.png') }}" alt="ABSORB logo"><span>ABSORB</span></a>
       <nav class="nav-list">
         <a class="nav-link {% block nav_dashboard %}{% endblock %}" href="{{ url_for('dashboard_page') }}">今天市場</a>
         <a class="nav-link" href="{{ url_for('dashboard_page') }}#industry-forecast">產業機會</a>
@@ -25,7 +40,10 @@
       </section>
       <details class="sidebar-disclosure"><summary>AI 量化解方聲明</summary><p>{{ AI_QUANT_DISCLOSURE }}</p></details>
     </aside>
-    <main class="main-content" id="main-content" tabindex="-1">{% block content %}{% endblock %}</main>
+    <div class="content-column">
+      <main class="main-content" id="main-content" tabindex="-1">{% block content %}{% endblock %}</main>
+      <footer class="site-footer">ABSORB｜AI 量化市場情報與決策輔助</footer>
+    </div>
   </div>
   <nav class="mobile-nav" aria-label="行動版導覽">
     <a href="{{ url_for('dashboard_page') }}">市場</a>
