@@ -9,5 +9,13 @@ $PythonCommand = Get-Command python -ErrorAction SilentlyContinue
 $PythonExe = if (Test-Path $BundledPython) { $BundledPython } elseif ($PythonCommand) { $PythonCommand.Source } else { $null }
 if (-not $PythonExe) { throw 'Python executable was not found' }
 $env:PYTHONPATH = Join-Path $RepoRoot '.deps'
-& $PythonExe -m stock_papi.batch.full_backtest_cli --root $DataRoot --max-items $MaxItems
-exit $LASTEXITCODE
+# Python 將資料來源警告寫入 stderr；保留到 task transcript，但不讓
+# Windows PowerShell 在 Python 實際成功時將它誤判為 terminating error。
+$ErrorActionPreference = 'Continue'
+try {
+  & $PythonExe -m stock_papi.batch.full_backtest_cli --root $DataRoot --max-items $MaxItems
+  $ExitCode = $LASTEXITCODE
+} finally {
+  $ErrorActionPreference = 'Stop'
+}
+exit $ExitCode

@@ -32,6 +32,12 @@ class PipelineSchedulerTests(unittest.TestCase):
         post_close = (scripts / "run_tw_post_close_pipeline.ps1").read_text(encoding="utf-8")
         self.assertLess(post_close.index("calendar-check"), post_close.index("--post-close"))
 
+    def test_full_backtest_logs_nonfatal_python_warnings_but_keeps_exit_code(self):
+        source = (Path(__file__).parents[1] / "scripts" / "run_full_backtest.ps1").read_text(encoding="utf-8")
+        self.assertIn("$ErrorActionPreference = 'Continue'", source)
+        self.assertIn("$ExitCode = $LASTEXITCODE", source)
+        self.assertIn("$ErrorActionPreference = 'Stop'", source)
+
     def test_task_wrapper_records_success_or_failure_without_secrets(self):
         source = (Path(__file__).parents[1] / "scripts" / "invoke_pipeline_task.ps1").read_text(encoding="utf-8")
         for required in ("logs\\tasks", "current-", "Tee-Object", "$LASTEXITCODE", "ErrorActionPreference = 'Continue'", "ErrorActionPreference = 'Stop'", "success = $false"):
