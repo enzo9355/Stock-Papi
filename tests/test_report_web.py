@@ -159,6 +159,28 @@ class ReportWebTests(unittest.TestCase):
         self.assertIn("閱讀完整報告", html)
         self.assertNotIn("下載", html)
 
+    def test_legacy_report_without_card_summary_is_not_labeled_as_pending(self):
+        legacy_index = json.loads(json.dumps(self.index))
+        for key in ("market_action", "headline", "key_industries"):
+            legacy_index["reports"][0].pop(key)
+
+        def reader(object_name, max_bytes):
+            if object_name == "reports/v1/index-TW.json":
+                return json.dumps(legacy_index).encode("utf-8")
+            return self._reader(object_name, max_bytes)
+
+        with patch.object(
+            stock_app, "_gcs_get_report_object", side_effect=reader, create=True
+        ):
+            response = stock_app.app.test_client().get("/reports")
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("舊版報告", html)
+        self.assertIn("不是等待人工確認", html)
+        self.assertIn("舊版未提供", html)
+        self.assertNotIn("等待確認", html)
+
     def test_empty_reports_page_has_clear_state(self):
         with patch.object(stock_app, "_gcs_get_report_object", return_value=None, create=True):
             response = stock_app.app.test_client().get("/reports")
