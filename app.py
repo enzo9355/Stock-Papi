@@ -2,8 +2,8 @@
 
 import sys
 
-from stock_papi import application as _compatibility_module
-from stock_papi.web.app_factory import create_app
+from absorb import application as _compatibility_module
+from absorb.web.app_factory import create_app
 
 
 _compatibility_module.app = create_app()

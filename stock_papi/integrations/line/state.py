@@ -18,7 +18,7 @@ def get_line_state_bounded(store, user_id, timeout, slots, logger, max_workers, 
     result = queue_module.Queue(maxsize=1)
     slots = slots
     if not slots.acquire(blocking=False):
-        logger.warning(f"Firestore read slots exhausted (MAX_WORKERS={max_workers}) for user {user_id}")
+        logger.warning("Firestore read slots exhausted (MAX_WORKERS=%s)", max_workers)
         raise StoreError("關注功能讀取忙碌")
 
     def load_state():
@@ -26,8 +26,8 @@ def get_line_state_bounded(store, user_id, timeout, slots, logger, max_workers, 
             value = (False, None)
             try:
                 value = (True, store.load(user_id)[0])
-            except BaseException as exc:
-                logger.error(f"Firestore load exception for user {user_id}: {type(exc).__name__} - {exc}", exc_info=True)
+            except BaseException:
+                logger.error("Firestore state load failed")
             try:
                 result.put_nowait(value)
             except BaseException:

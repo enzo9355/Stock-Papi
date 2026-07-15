@@ -82,8 +82,8 @@ class FirestoreStore:
                     or expires_in <= 0
                 ):
                     raise ValueError("metadata fields")
-            except Exception as exc:
-                logger.error(f"Metadata token request failed: {exc}", exc_info=True)
+            except Exception:
+                logger.error("Metadata token request failed")
                 raise StoreError("Metadata token request failed") from None
 
             self._cached_token = token
@@ -120,16 +120,16 @@ class FirestoreStore:
                     backoff *= 2
                     continue
                 return response
-            except StoreError as exc:
+            except StoreError:
                 if attempt < max_retries - 1:
-                    logger.warning(f"Transient StoreError in Firestore request, retrying in {backoff}s... (Attempt {attempt + 1}/{max_retries}): {exc}")
+                    logger.warning(f"Transient StoreError in Firestore request, retrying in {backoff}s... (Attempt {attempt + 1}/{max_retries})")
                     time.sleep(backoff)
                     backoff *= 2
                     continue
                 raise
-            except Exception as exc:
+            except Exception:
                 if attempt < max_retries - 1:
-                    logger.warning(f"Transient exception in Firestore request, retrying in {backoff}s... (Attempt {attempt + 1}/{max_retries}): {exc}")
+                    logger.warning(f"Transient exception in Firestore request, retrying in {backoff}s... (Attempt {attempt + 1}/{max_retries})")
                     time.sleep(backoff)
                     backoff *= 2
                     continue
@@ -147,30 +147,30 @@ class FirestoreStore:
         return f"{self.collection_url}/{quote(user_id, safe='')}"
 
     def load(self, user_id):
-        logger.info(f"Firestore load starting for user {user_id}")
+        logger.info("Firestore load starting")
         try:
             response = self._request("GET", self._document_url(user_id), timeout=5)
             if response.status_code == 404:
-                logger.info(f"Firestore load document not found for user {user_id}")
+                logger.info("Firestore load document not found")
                 return empty_state(), None
             if response.status_code != 200:
-                logger.error(f"Firestore load failed with status {response.status_code} for user {user_id}")
+                logger.error(f"Firestore load failed with status {response.status_code}")
                 raise StoreError(f"Firestore read failed with status {response.status_code}")
             try:
                 document = response.json()
                 update_time = document.get("updateTime")
-            except Exception as exc:
-                logger.error(f"Firestore load response invalid for user {user_id}: {exc}", exc_info=True)
+            except Exception:
+                logger.error("Firestore load response invalid")
                 raise StoreError("Firestore read response was invalid") from None
-            logger.info(f"Firestore load successful for user {user_id}")
+            logger.info("Firestore load successful")
             return self._document_state(document), update_time
-        except Exception as exc:
-            if not isinstance(exc, StoreError):
-                logger.error(f"Firestore load error for user {user_id}: {type(exc).__name__} - {exc}", exc_info=True)
+        except Exception as error:
+            if not isinstance(error, StoreError):
+                logger.error("Firestore load failed")
             raise
 
     def save(self, user_id, state, update_time):
-        logger.info(f"Firestore save starting for user {user_id}")
+        logger.info("Firestore save starting")
         params = {"updateMask.fieldPaths": "state"}
         if update_time:
             params["currentDocument.updateTime"] = update_time
@@ -191,47 +191,47 @@ class FirestoreStore:
                 json=body,
             )
             if response.status_code in {409, 412}:
-                logger.warning(f"Firestore save conflict (409/412) for user {user_id}")
+                logger.warning("Firestore save conflict (409/412)")
                 raise StoreConflict("Firestore write conflict")
             if response.status_code == 400:
                 try:
                     payload = response.json()
                     error = payload.get("error", {})
                     if error.get("status") == "FAILED_PRECONDITION":
-                        logger.warning(f"Firestore save conflict (FAILED_PRECONDITION) for user {user_id}")
+                        logger.warning("Firestore save conflict (FAILED_PRECONDITION)")
                         raise StoreConflict("Firestore write conflict")
                 except StoreConflict:
                     raise
                 except Exception:
                     pass
             if response.status_code != 200:
-                logger.error(f"Firestore save failed with status {response.status_code} for user {user_id}")
+                logger.error(f"Firestore save failed with status {response.status_code}")
                 raise StoreError(f"Firestore write failed with status {response.status_code}")
             try:
                 update_time = response.json()["updateTime"]
                 if not isinstance(update_time, str) or not update_time:
                     raise ValueError("invalid updateTime")
-                logger.info(f"Firestore save successful for user {user_id}")
+                logger.info("Firestore save successful")
                 return update_time
-            except Exception as exc:
-                logger.error(f"Firestore save response invalid for user {user_id}: {exc}", exc_info=True)
+            except Exception:
+                logger.error("Firestore save response invalid")
                 raise StoreError("Firestore write response was invalid") from None
-        except Exception as exc:
-            if not isinstance(exc, (StoreError, StoreConflict)):
-                logger.error(f"Firestore save error for user {user_id}: {type(exc).__name__} - {exc}", exc_info=True)
+        except Exception as error:
+            if not isinstance(error, (StoreError, StoreConflict)):
+                logger.error("Firestore save failed")
             raise
 
     def update(self, user_id, mutate):
-        logger.info(f"Firestore update starting for user {user_id}")
+        logger.info("Firestore update starting")
         for attempt in range(2):
             try:
                 state, update_time = self.load(user_id)
                 mutate(state)
                 self.save(user_id, state, update_time)
-                logger.info(f"Firestore update successful for user {user_id} on attempt {attempt + 1}")
+                logger.info(f"Firestore update successful on attempt {attempt + 1}")
                 return state
-            except StoreConflict as exc:
-                logger.warning(f"Firestore update conflict on attempt {attempt + 1} for user {user_id}")
+            except StoreConflict:
+                logger.warning(f"Firestore update conflict on attempt {attempt + 1}")
                 if attempt == 1:
                     raise
         raise StoreConflict("Firestore write conflict")
@@ -287,11 +287,11 @@ class SupabaseStore:
         self.client = client
 
     def load(self, user_id):
-        logger.info(f"Supabase load starting for user {user_id}")
+        logger.info("Supabase load starting")
         try:
             res = self.client.table("line_users").select("state, update_time").eq("user_id", user_id).execute()
             if not res.data:
-                logger.info(f"Supabase load document not found for user {user_id}")
+                logger.info("Supabase load document not found")
                 return empty_state(), None
             row = res.data[0]
             raw_state = row.get("state")
@@ -299,14 +299,14 @@ class SupabaseStore:
                 state = json.loads(raw_state)
             else:
                 state = raw_state or {}
-            logger.info(f"Supabase load successful for user {user_id}")
+            logger.info("Supabase load successful")
             return normalize_state(state), row.get("update_time")
-        except Exception as exc:
-            logger.error(f"Supabase load error for user {user_id}: {exc}", exc_info=True)
-            raise StoreError(f"Supabase read failed: {exc}") from exc
+        except Exception:
+            logger.error("Supabase load failed")
+            raise StoreError("Supabase read failed") from None
 
     def save(self, user_id, state, update_time):
-        logger.info(f"Supabase save starting for user {user_id}")
+        logger.info("Supabase save starting")
         try:
             serialized_state = normalize_state(state)
             new_update_time = str(int(time.time() * 1000))
@@ -317,7 +317,7 @@ class SupabaseStore:
                     "update_time": new_update_time
                 }).eq("user_id", user_id).eq("update_time", update_time).execute()
                 if not res.data:
-                    logger.warning(f"Supabase save conflict for user {user_id}")
+                    logger.warning("Supabase save conflict")
                     raise StoreConflict("Supabase write conflict")
             else:
                 res = self.client.table("line_users").upsert({
@@ -327,25 +327,25 @@ class SupabaseStore:
                 }).execute()
                 if not res.data:
                     raise StoreError("Supabase write failed")
-            logger.info(f"Supabase save successful for user {user_id}")
+            logger.info("Supabase save successful")
             return new_update_time
         except StoreConflict:
             raise
-        except Exception as exc:
-            logger.error(f"Supabase save error for user {user_id}: {exc}", exc_info=True)
-            raise StoreError(f"Supabase write failed: {exc}") from exc
+        except Exception:
+            logger.error("Supabase save failed")
+            raise StoreError("Supabase write failed") from None
 
     def update(self, user_id, mutate):
-        logger.info(f"Supabase update starting for user {user_id}")
+        logger.info("Supabase update starting")
         for attempt in range(2):
             try:
                 state, update_time = self.load(user_id)
                 mutate(state)
                 self.save(user_id, state, update_time)
-                logger.info(f"Supabase update successful for user {user_id} on attempt {attempt + 1}")
+                logger.info(f"Supabase update successful on attempt {attempt + 1}")
                 return state
             except StoreConflict:
-                logger.warning(f"Supabase update conflict on attempt {attempt + 1} for user {user_id}")
+                logger.warning(f"Supabase update conflict on attempt {attempt + 1}")
                 if attempt == 1:
                     raise
         raise StoreConflict("Supabase write conflict")
@@ -369,8 +369,8 @@ class SupabaseStore:
                 if len(res.data) < limit:
                     break
                 offset += limit
-        except Exception as exc:
-            raise StoreError(f"Supabase list failed: {exc}") from exc
+        except Exception:
+            raise StoreError("Supabase list failed") from None
 
 
 

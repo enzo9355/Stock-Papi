@@ -23,6 +23,6 @@ def market_insights_payload(fetch_insights, get_stock_name, industry_map, today,
         "mops": [],
         "etfs": [],
         "supply_chains": build_supply_chains({}),
-        "sources": ["Stock Papi fallback"],
+        "sources": ["ABSORB fallback"],
         "degraded": True,
     }

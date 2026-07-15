@@ -1,1 +1,1 @@
-"""Stock-Papi application package."""
+"""Legacy implementation package retained behind the ABSORB compatibility boundary."""

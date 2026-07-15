@@ -269,7 +269,7 @@ class SnapshotPublisher:
             _, staged_manifest = self.validate(staged, production_manifest_path)
         except (FileNotFoundError, OSError, ValidationError) as exc:
             self._cleanup_staging(staging_manifest_path)
-            logger.error("快照發布驗證失敗：%s", exc)
+            logger.error("快照發布驗證失敗：%s", type(exc).__name__)
             self._emit_event(
                 "VALIDATION_FAILED",
                 EventSeverity.CRITICAL,

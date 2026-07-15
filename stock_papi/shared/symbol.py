@@ -70,5 +70,10 @@ def get_instrument_type(symbol: str) -> str:
                 return "STOCK"
         except Exception:
             pass
-            
+
+        # Numeric Taiwan tickers normalize to the TW namespace.  If the
+        # optional twstock catalog is unavailable, the known ETF allowlist
+        # above is still authoritative and the remaining ticker is a stock.
+        return "STOCK"
+
     return "unknown"

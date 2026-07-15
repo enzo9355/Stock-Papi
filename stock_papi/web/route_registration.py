@@ -6,6 +6,7 @@ from stock_papi.web.routes.reports import register_report_routes
 from stock_papi.web.routes.system import register_system_routes
 from stock_papi.web.routes.auth import register_auth_routes
 from stock_papi.integrations.line.webhook import register_line_routes
+from absorb.conversation.web import register_conversation_routes
 
 
 def register_routes(app, dependencies):
@@ -42,6 +43,11 @@ def register_routes(app, dependencies):
         search_stock=dependencies["search_stock"],
         http_post=dependencies["auth_http_post"],
         now=dependencies["auth_now"],
+    )
+    register_conversation_routes(
+        app,
+        converse=dependencies["converse"],
+        resolve_authenticated_identity=dependencies["resolve_conversation_identity"],
     )
     register_line_routes(
         app,

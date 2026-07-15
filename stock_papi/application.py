@@ -12,6 +12,8 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 import twstock
 import json
+import hmac
+import re
 
 from market_insights import build_industries, build_supply_chains
 
@@ -200,7 +202,7 @@ from stock_papi.services.dashboard import (
     dashboard_sector_cards as _dashboard_sector_cards,
     dashboard_top_picks,
 )
-from stock_papi.services.auth import LineLoginConfig, utc_now
+from stock_papi.services.auth import LineLoginConfig, utc_now, verify_opaque_token
 from stock_papi.services.market import (
     build_market_map as _build_market_map,
     build_sector_signal_snapshot as _build_sector_signal_snapshot,
@@ -215,7 +217,7 @@ from stock_papi.services.stock_analysis import (
     snapshot_dataframe as _build_snapshot_dataframe,
 )
 from stock_papi.services.papi import (
-    PapiService,
+    AbsorbResearchService,
     get_ai_insight_for_broadcast as _get_ai_insight_for_broadcast,
 )
 from stock_papi.services.news import get_news as _get_news
@@ -223,6 +225,13 @@ from stock_papi.services.market_insights import (
     market_insights_payload as _market_insights_payload,
 )
 from stock_papi.web.legacy_html import render_web
+from absorb.conversation.context import MemoryContextStore
+from absorb.conversation.orchestrator import ConversationOrchestrator
+from absorb.conversation.provider import GeminiConversationProvider
+from absorb.conversation.renderers import render_line
+from absorb.conversation.tools import build_registry
+from absorb.conversation.command_bridge import is_fixed_command
+from absorb.conversation.metrics import record_metric
 
 
 
@@ -241,10 +250,11 @@ finmind_token = None
 _line_state_read_slots = threading.BoundedSemaphore(LINE_STATE_READ_MAX_WORKERS)
 
 APPLICATION_ROOT = os.path.dirname(os.path.dirname(__file__))
-SAMPLE_REPORT_FILENAME = "stock-papi-tw-industry-daily-SAMPLE.pdf"
-SAMPLE_REPORT_PATH = os.path.join(
-    APPLICATION_ROOT, "static", "samples", SAMPLE_REPORT_FILENAME
-)
+SAMPLE_REPORT_FILENAME = "absorb-tw-industry-daily-SAMPLE.pdf"
+_SAMPLE_DIRECTORY = os.path.join(APPLICATION_ROOT, "static", "samples")
+_ABSORB_SAMPLE_PATH = os.path.join(_SAMPLE_DIRECTORY, SAMPLE_REPORT_FILENAME)
+_LEGACY_SAMPLE_PATH = os.path.join(_SAMPLE_DIRECTORY, "stock-papi-tw-industry-daily-SAMPLE.pdf")
+SAMPLE_REPORT_PATH = _ABSORB_SAMPLE_PATH if os.path.isfile(_ABSORB_SAMPLE_PATH) else _LEGACY_SAMPLE_PATH
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 supabase_client = None
@@ -265,12 +275,14 @@ line_login_config = LineLoginConfig.from_env()
 line_auth_store = FirestoreAuthStore(GCP_PROJECT_ID) if GCP_PROJECT_ID else None
 
 gemini_model = _LazyGeminiModel(GEMINI_API_KEY) if GEMINI_API_KEY else None
+conversation_context_store = MemoryContextStore(ttl_seconds=1800)
+_conversation_provider_cache = {"model": None, "provider": None}
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
-logger = logging.getLogger("app")
+logger = logging.getLogger("absorb")
 
 
 def runtime_logging_secrets():
@@ -295,7 +307,7 @@ CATEGORY_PAGE_SIZE = 12
 SECTOR_SCAN_LIMIT = 20
 SECTOR_DISPLAY_LIMIT = 10
 SECTOR_SNAPSHOT_DOC = "sector_signals"
-PAPI_THEME_SECTORS = {
+ABSORB_THEME_SECTORS = {
     "AI伺服器": {"鴻海", "廣達", "緯創", "緯穎", "英業達", "仁寶", "和碩", "神達", "勤誠"},
     "PC／筆電": {"華碩", "宏碁", "微星", "技嘉", "神基", "藍天"},
     "散熱機構": {"雙鴻", "奇鋐", "建準", "勤誠", "營邦", "迎廣"},
@@ -305,6 +317,8 @@ PAPI_THEME_SECTORS = {
     "IC設計ASIC": {"聯發科", "瑞昱", "創意", "世芯-KY", "力旺", "M31"},
     "封測設備": {"日月光投控", "矽格", "京元電子", "辛耘", "弘塑", "家登"},
 }
+# Compatibility alias for callers that still patch the pre-migration identifier.
+PAPI_THEME_SECTORS = ABSORB_THEME_SECTORS
 _SYSTEM_CACHE = {}
 CACHE_EXPIRY_SECONDS = 3600
 _YFINANCE_CACHE = {}
@@ -690,6 +704,160 @@ def call_papi_gemini_fallback(prompt):
     return _papi_service().call_gemini(prompt)
 
 
+def _conversation_provider():
+    cached = _conversation_provider_cache
+    if cached["provider"] is None or cached["model"] is not gemini_model:
+        cached["model"] = gemini_model
+        cached["provider"] = GeminiConversationProvider(gemini_model)
+    return cached["provider"]
+
+
+def _conversation_sector_ranking():
+    rows = []
+    for card in dashboard_sector_cards()[:10]:
+        leader = card.get("leader") if isinstance(card, dict) else None
+        if not isinstance(leader, dict):
+            continue
+        recommendation = leader.get("recommendation") if isinstance(leader.get("recommendation"), dict) else {}
+        probability = leader.get("prob")
+        probability = probability / 100 if isinstance(probability, (int, float)) else None
+        rows.append({
+            "industry": card.get("name"),
+            "symbol": leader.get("code"),
+            "name": leader.get("name"),
+            "five_day_probability": probability,
+            "trend": leader.get("trend"),
+            "action_label": recommendation.get("action"),
+            "data_as_of": leader.get("as_of"),
+        })
+    return rows
+
+
+def _conversation_report_lookup(report_type):
+    try:
+        item = next(
+            (row for row in _published_report_index_v2() if row.get("report_type") == report_type),
+            None,
+        )
+    except Exception:
+        item = None
+    if not isinstance(item, dict):
+        return {
+            "market": "TW", "report_type": report_type,
+            "data_quality": "unavailable", "limitations": ["report unavailable"],
+        }
+    return {
+        "market": item.get("market", "TW"),
+        "report_type": report_type,
+        "title": item.get("title"),
+        "summary": list(item.get("summary") or [])[:5],
+        "source_market_date": item.get("source_market_date"),
+        "applicable_trading_date": item.get("applicable_trading_date"),
+        "published_at": item.get("published_at"),
+        "data_quality": "available",
+    }
+
+
+def _conversation_search_stock(query):
+    code, name = _extract_stock_from_papi_prompt(query)
+    return (code, name) if code else search_stock_code(query)
+
+
+def _conversation_user_state(principal):
+    if not principal.startswith("line:"):
+        return {}
+    return get_line_state_bounded(principal.removeprefix("line:"))
+
+
+def _line_conversation_action_executor(user_id):
+    def execute(action, parameters, _idempotency_key):
+        symbol = parameters.get("symbol")
+        name = parameters.get("name") or symbol
+        if action == "watchlist_add":
+            update_line_state(user_id, lambda state: add_watch(state, symbol, name))
+        elif action == "watchlist_remove":
+            update_line_state(user_id, lambda state: remove_watch(state, symbol))
+        elif action == "watchlist_clear":
+            def clear(state):
+                for item in list(state.get("watchlist", [])):
+                    remove_watch(state, item.get("code"))
+            update_line_state(user_id, clear)
+        elif action == "alert_create":
+            def create_alert(state):
+                if not _find_matching_alert(
+                    state.get("alerts", []), symbol,
+                    parameters.get("kind"), parameters.get("value"),
+                ):
+                    add_alert(
+                        state, symbol, name,
+                        parameters.get("kind"), parameters.get("value"),
+                    )
+            update_line_state(user_id, create_alert)
+        elif action == "alerts_clear":
+            update_line_state(user_id, lambda state: state.update(alerts=[]))
+        else:
+            raise StateError("unsupported action")
+    return execute
+
+
+def run_absorb_conversation(*, principal, question, access="public", action_executor=None):
+    state_lookup = (lambda: _conversation_user_state(principal)) if access == "authenticated" else None
+    orchestrator = ConversationOrchestrator(
+        context_store=conversation_context_store,
+        tool_registry=build_registry(
+            analyze=lambda symbol: analyze(symbol),
+            sector_ranking=_conversation_sector_ranking,
+            report_lookup=_conversation_report_lookup,
+            watchlist_lookup=state_lookup,
+            alerts_lookup=state_lookup,
+        ),
+        search_stock=_conversation_search_stock,
+        provider=_conversation_provider(),
+        action_executor=action_executor,
+    )
+    return orchestrator.handle(
+        principal=principal, question=question, access=access,
+    )
+
+
+def run_absorb_web_conversation(*, principal, question, access="public"):
+    action_executor = None
+    if access == "authenticated" and principal.startswith("line:"):
+        action_executor = _line_conversation_action_executor(principal.removeprefix("line:"))
+    return run_absorb_conversation(
+        principal=principal,
+        question=question,
+        access=access,
+        action_executor=action_executor,
+    )
+
+
+def _web_conversation_identity(http_request):
+    if not line_login_config.configured or line_auth_store is None:
+        return None
+    session_id = verify_opaque_token(
+        http_request.cookies.get(line_login_config.session_cookie_name),
+        line_login_config.session_secret,
+    )
+    if not session_id:
+        return None
+    try:
+        session = line_auth_store.load_session(session_id, utc_now())
+    except Exception:
+        return None
+    user_id = str((session or {}).get("line_user_id") or "")
+    csrf_token = (session or {}).get("csrf_token")
+    supplied = http_request.headers.get("X-CSRF-Token")
+    if (
+        re.fullmatch(r"U[0-9a-f]{32}", user_id) is None
+        or not isinstance(csrf_token, str)
+        or not isinstance(supplied, str)
+        or not hmac.compare_digest(supplied, csrf_token)
+    ):
+        return None
+    return f"line:{user_id}", "authenticated"
+
+
 def sector_signal_item(code, data):
     return _sector_signal_item(code, data, get_stock_name=get_stock_name)
 
@@ -707,7 +875,7 @@ def build_sector_signal_snapshot(market_map, analyze_fn, now=None, activity=None
 
 
 def build_market_map():
-    return _build_market_map(twstock.codes, PAPI_THEME_SECTORS)
+    return _build_market_map(twstock.codes, ABSORB_THEME_SECTORS)
 
 industry_map = build_market_map()
 
@@ -859,12 +1027,12 @@ def _resolve_postback_stock(code):
 def handle_postback(event):
     try:
         _handle_postback_impl(event)
-    except Exception as e:
-        logger.error(f"Unexpected error in handle_postback: {e}", exc_info=True)
+    except Exception:
+        logger.error("Unexpected error in handle_postback")
         try:
             _reply_text(event, "系統暫時忙碌中，請稍後再試 🙏")
-        except Exception as reply_err:
-            logger.error(f"Failed to send fallback reply in postback: {reply_err}", exc_info=True)
+        except Exception:
+            logger.error("Failed to send fallback reply in postback")
 
 def _handle_postback_impl(event):
     return _line_handle_postback_impl(event, {
@@ -884,12 +1052,12 @@ def _handle_postback_impl(event):
 def handle_message(event):
     try:
         _handle_message_impl(event)
-    except Exception as e:
-        logger.error(f"Unexpected error in handle_message: {e}", exc_info=True)
+    except Exception:
+        logger.error("Unexpected error in handle_message")
         try:
             _reply_text(event, "系統暫時忙碌中，請稍後再試 🙏")
-        except Exception as reply_err:
-            logger.error(f"Failed to send fallback reply in message: {reply_err}", exc_info=True)
+        except Exception:
+            logger.error("Failed to send fallback reply in message")
 
 def _handle_message_impl(event):
     return _line_handle_message_impl(event, {
@@ -917,6 +1085,16 @@ def _handle_message_impl(event):
         "build_sector_signal_carousel": build_sector_signal_carousel,
         "web_root": request.host_url.replace("http://", "https://").rstrip("/"),
         "request_host_url": request.host_url,
+        "conversation": lambda prompt, user_id: render_line(
+            run_absorb_conversation(
+                principal=f"line:{user_id}",
+                question=prompt,
+                access="authenticated",
+                action_executor=_line_conversation_action_executor(user_id),
+            )
+        ),
+        "is_fixed_command": is_fixed_command,
+        "record_metric": record_metric,
     })
 
 
@@ -941,6 +1119,8 @@ def route_dependencies():
         "get_auth_store": lambda: line_auth_store,
         "auth_http_post": requests.post,
         "auth_now": utc_now,
+        "converse": lambda **kwargs: run_absorb_web_conversation(**kwargs),
+        "resolve_conversation_identity": lambda http_request: _web_conversation_identity(http_request),
         "analyze": lambda code: analyze(code),
         "dashboard_sector_cards": lambda: dashboard_sector_cards(),
         "cached_opportunities": lambda: cached_opportunities(),
@@ -966,7 +1146,7 @@ def route_dependencies():
         ),
     }
 def _papi_service():
-    return PapiService(
+    return AbsorbResearchService(
         requests_module=requests,
         openalice_url=OPENALICE_API_URL,
         openalice_token=OPENALICE_API_TOKEN,

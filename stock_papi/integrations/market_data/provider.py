@@ -56,8 +56,8 @@ def fetch_finmind_dataset(
             ) * 60
         response.raise_for_status()
         return pd.DataFrame(response.json().get("data", [])), blocked_until
-    except (requests_module.RequestException, ValueError, TypeError) as exc:
-        logger.warning("FinMind %s 讀取失敗: %s", dataset, exc)
+    except (requests_module.RequestException, ValueError, TypeError):
+        logger.warning("FinMind %s 讀取失敗", dataset)
         return pd.DataFrame(), blocked_until
 
 
@@ -102,8 +102,8 @@ def fetch_yfinance_price_history(
                 ]
                 cache[cache_key] = (frame.copy(), timestamp)
                 return frame
-    except Exception as exc:
-        logger.warning("Yahoo Finance 讀取失敗: %s", exc)
+    except Exception:
+        logger.warning("Yahoo Finance 讀取失敗")
     return pd.DataFrame()
 
 
@@ -120,8 +120,8 @@ def fetch_option_context_history(
         for symbol, future in futures.items():
             try:
                 frames[symbol] = future.result()
-            except Exception as exc:
-                logger.warning("選擇權市場指標讀取失敗 (%s): %s", symbol, exc)
+            except Exception:
+                logger.warning("選擇權市場指標讀取失敗 (%s)", symbol)
                 frames[symbol] = pd.DataFrame()
     return tuple(frames[symbol] for symbol in symbols)
 

@@ -200,7 +200,7 @@ def fetch_stocktwits_sentiment(code, *, window_days=30, parse_items=None):
         response = requests.get(
             "https://api.stocktwits.com/api/2/streams/symbol/"
             f"{urllib.parse.quote(str(code).upper())}.json",
-            headers={"User-Agent": "Stock-Papi/1.0 sentiment"},
+            headers={"User-Agent": "ABSORB/1.0 sentiment"},
             timeout=3,
         )
         response.raise_for_status()

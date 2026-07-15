@@ -2,9 +2,10 @@
 
 import re
 
-import requests
 from linebot.models import FlexSendMessage, TextSendMessage
 
+from absorb.conversation.errors import InputRejected
+from absorb.conversation.policies import validate_question
 from line_state import (
     StateError,
     StoreError,
@@ -203,11 +204,6 @@ def handle_message_impl(event, deps):
     store_error_text = deps["store_error_text"]
     now = deps["now"]
     is_crypto_query = deps["is_crypto_query"]
-    openalice_url = deps["openalice_url"]
-    openalice_token = deps["openalice_token"]
-    call_openalice = deps["call_openalice"]
-    call_papi_fallback = deps["call_papi_fallback"]
-    logger = deps["logger"]
     search_stock_code = deps["search_stock_code"]
     analyze = deps["analyze"]
     build_projection_flex = deps["build_projection_flex"]
@@ -217,8 +213,15 @@ def handle_message_impl(event, deps):
     build_sector_signal_carousel = deps["build_sector_signal_carousel"]
     web_root = deps["web_root"]
     request_host_url = deps["request_host_url"]
+    conversation = deps["conversation"]
+    is_fixed_command = deps.get("is_fixed_command", lambda _message: False)
+    record_metric = deps.get("record_metric", lambda _name: None)
 
-    msg = event.message.text.strip()
+    try:
+        msg = validate_question(event.message.text)
+    except InputRejected as exc:
+        reply_text(event, str(exc))
+        return
     user_id = getattr(getattr(event, "source", None), "user_id", None)
     current_state = None
     state_load_failed = False
@@ -228,6 +231,7 @@ def handle_message_impl(event, deps):
         except StoreError:
             state_load_failed = True
     if current_state and current_state.get("pending"):
+        record_metric("command_requests")
         expected_pending = dict(current_state["pending"])
         try:
             if msg == "取消":
@@ -279,24 +283,20 @@ def handle_message_impl(event, deps):
             reply_text(event, store_error_text())
         return
 
-    papi_match = re.fullmatch(r"(?i)papi\s*(.+)", msg)
-    if papi_match:
-        prompt = papi_match.group(1).strip()
+    legacy_ai_match = re.fullmatch(r"(?i)papi\s*(.+)", msg)
+    if legacy_ai_match:
+        record_metric("command_requests")
+        prompt = legacy_ai_match.group(1).strip()
         if is_crypto_query(prompt):
-            reply_text(event, "Papi 分析目前不支援虛擬貨幣。")
-        elif openalice_url and openalice_token:
-            try:
-                reply_text(event, call_openalice(prompt))
-            except (requests.RequestException, ValueError, TypeError):
-                reply_text(event, "Papi 分析服務暫時無法回應，請稍後再試。")
+            reply_text(event, "ABSORB 分析目前不支援虛擬貨幣。")
+        elif not user_id:
+            reply_text(event, "無法識別 LINE 使用者，請從一對一聊天室操作。")
         else:
-            try:
-                reply = call_papi_fallback(prompt)
-                reply_text(event, reply or "Papi 分析服務尚未設定。")
-            except Exception as exc:
-                logger.error("Papi Gemini fallback failed: %s", exc)
-                reply_text(event, "Papi AI 摘要暫時失敗；你仍可直接輸入股票代號查看完整量化分析。")
+            reply_text(event, conversation(prompt, user_id))
         return
+
+    if is_fixed_command(msg):
+        record_metric("command_requests")
 
     calc_text = re.fullmatch(r"試算\s+([A-Za-z0-9-]+)\s+([0-9]+(?:\.[0-9]+)?)", msg)
     if calc_text:
@@ -381,7 +381,7 @@ def handle_message_impl(event, deps):
     elif msg == "功能選單":
         line_bot_api.reply_message(
             event.reply_token,
-            FlexSendMessage(alt_text="Stock Papi 功能選單", contents=build_line_navigation_flex(web_root)),
+            FlexSendMessage(alt_text="ABSORB 功能選單", contents=build_line_navigation_flex(web_root)),
         )
     elif msg.startswith("分類第_") and msg.endswith("頁"):
         try:
@@ -428,6 +428,7 @@ def handle_message_impl(event, deps):
     else:
         code, name = search_stock_code(msg)
         if code:
+            record_metric("command_requests")
             data = analyze(code)
             if not data:
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無資料，請稍後再試。"))
@@ -443,7 +444,7 @@ def handle_message_impl(event, deps):
                 FlexSendMessage(alt_text=f"📊 {name} ({code}) 預測出爐，點擊查看！", contents=flex_content),
             )
         elif getattr(getattr(event, "source", None), "type", "user") == "user":
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="請輸入股票代碼，或輸入：今日盤勢 / 我的關注 / 提醒管理 / 完整分析"),
-            )
+            if not user_id:
+                reply_text(event, "無法識別 LINE 使用者，請從一對一聊天室操作。")
+            else:
+                reply_text(event, conversation(msg, user_id))

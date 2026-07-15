@@ -70,8 +70,8 @@ def run_latest_inference(frame, *, add_prediction_target, pd, np, logger):
             "top_features": top_features,
             "training_observations": len(training),
         }
-    except Exception as exc:
-        logger.error("最新推論錯誤: %s", exc)
+    except Exception:
+        logger.error("最新推論失敗")
         return None
 
 
@@ -121,6 +121,6 @@ def run_ai_engine(
                 if metrics["mdd"] > -15 else "⚠️ 模型失真：容易追高殺低。"
             )
         return metrics
-    except Exception as exc:
-        logger.error("回測引擎錯誤: %s", exc)
+    except Exception:
+        logger.error("回測引擎失敗")
         return None

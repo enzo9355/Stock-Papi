@@ -11,6 +11,7 @@ os.environ.setdefault("LINE_CHANNEL_ACCESS_TOKEN", "test")
 os.environ.setdefault("LINE_CHANNEL_SECRET", "test")
 
 import app as stock_app
+from absorb.conversation.schemas import ConversationAnswer
 from line_state import StoreError, empty_state
 
 
@@ -655,39 +656,24 @@ class MessageFlowTests(unittest.TestCase):
 
         self.assertIn("約可買", flex_text(line_api.reply_message.call_args.args[1]))
 
-    def test_papi_command_replies_with_openalice_summary(self):
+    def test_papi_alias_uses_shared_absorb_conversation(self):
         line_api = Mock()
-        response = Mock()
-        response.raise_for_status.return_value = None
-        response.json.return_value = {
-            "summary": "台積電短線偏多，但追價風險升高。",
-            "detail_url": "https://alice.example/reports/2330",
-        }
-        data = {
-            "code": "2330", "name": "台積電", "price": 100.0, "prob": 62,
-            "trend": "多頭", "rsi": 58.2, "macd_osc": 1.0, "k": 70, "d": 60,
-            "s_status": "偏多", "s_score": 68,
-            "foreign_flow": {"available": True, "status": "買超", "net_5": 1200},
-            "news": [], "bt": {"strat_cum": 8.0, "win_rate": 55, "sharpe": 1.1, "conclusion": "偏多"},
-        }
+        user_id = "U0123456789abcdef0123456789abcdef"
         with stock_app.app.test_request_context("/callback", base_url="https://example.com/"), \
              patch.object(stock_app, "line_store", None), \
              patch.object(stock_app, "line_bot_api", line_api), \
-             patch.object(stock_app, "OPENALICE_API_URL", "https://alice.example/api/analyze", create=True), \
-             patch.object(stock_app, "OPENALICE_API_TOKEN", "secret", create=True), \
-             patch.object(stock_app, "search_stock_code", return_value=("2330", "台積電")), \
-             patch.object(stock_app, "analyze", return_value=data), \
-             patch.object(stock_app.requests, "post", return_value=response) as post:
-            stock_app.handle_message(message_event("Papi 分析 2330"))
+             patch.object(
+                 stock_app,
+                 "run_absorb_conversation",
+                 return_value=ConversationAnswer("結論：分批布局"),
+             ) as converse, \
+             patch.object(stock_app.requests, "post") as post:
+            stock_app.handle_message(message_event("Papi 分析 2330", user_id=user_id))
 
-        post.assert_called_once()
-        openalice_prompt = post.call_args.kwargs["json"]["prompt"]
-        self.assertIn("你是 Papi", openalice_prompt)
-        self.assertIn("五日上漲機率 62%", openalice_prompt)
-        self.assertIn("使用者問題：分析 2330", openalice_prompt)
-        text = line_api.reply_message.call_args.args[1].text
-        self.assertIn("台積電短線偏多", text)
-        self.assertIn("https://alice.example/reports/2330", text)
+        post.assert_not_called()
+        self.assertIn("分批布局", line_api.reply_message.call_args.args[1].text)
+        self.assertEqual(converse.call_args.kwargs["principal"], f"line:{user_id}")
+        self.assertEqual(converse.call_args.kwargs["question"], "分析 2330")
 
     def test_papi_prompt_uses_sector_snapshot_for_recommendation_examples(self):
         snapshot = {
@@ -710,7 +696,7 @@ class MessageFlowTests(unittest.TestCase):
         self.assertIn("廣達 (2382)：AI伺服器，五日上漲機率 71%", prompt)
         self.assertIn("台積電 (2330)：半導體，五日上漲機率 64%", prompt)
         self.assertIn("最多提出 2 到 3 檔", prompt)
-        self.assertIn("可分成 2 到 3 段", prompt)
+        self.assertNotIn("蝴蝶", prompt)
 
     def test_papi_prompt_extracts_stock_code_from_natural_sentence(self):
         data = {
@@ -776,55 +762,50 @@ class MessageFlowTests(unittest.TestCase):
 
         self.assertIn("使用者問題：AI伺服器怎麼看", prompt)
 
-    def test_papi_command_requires_configuration(self):
+    def test_papi_alias_keeps_safe_degraded_reply(self):
+        line_api = Mock()
+        user_id = "U0123456789abcdef0123456789abcdef"
+        with stock_app.app.test_request_context("/callback", base_url="https://example.com/"), \
+             patch.object(stock_app, "line_store", None), \
+             patch.object(stock_app, "line_bot_api", line_api), \
+             patch.object(
+                 stock_app,
+                 "run_absorb_conversation",
+                 return_value=ConversationAnswer("ABSORB 自然語言分析暫時無法使用；固定指令仍可正常使用。"),
+             ), \
+             patch.object(stock_app.requests, "post") as post:
+            stock_app.handle_message(message_event("Papi 今日市場摘要", user_id=user_id))
+
+        post.assert_not_called()
+        self.assertIn("固定指令仍可正常使用", line_api.reply_message.call_args.args[1].text)
+
+    def test_papi_alias_does_not_call_legacy_gemini_fallback(self):
+        line_api = Mock()
+        user_id = "U0123456789abcdef0123456789abcdef"
+        with stock_app.app.test_request_context("/callback", base_url="https://example.com/"), \
+             patch.object(stock_app, "line_store", None), \
+             patch.object(stock_app, "line_bot_api", line_api), \
+             patch.object(stock_app, "call_papi_gemini_fallback") as legacy, \
+             patch.object(
+                 stock_app,
+                 "run_absorb_conversation",
+                 return_value=ConversationAnswer("結論：等待確認"),
+             ) as converse:
+            stock_app.handle_message(message_event("Papi 分析 2330", user_id=user_id))
+
+        legacy.assert_not_called()
+        converse.assert_called_once()
+
+    def test_papi_alias_requires_direct_user_identity(self):
         line_api = Mock()
         with stock_app.app.test_request_context("/callback", base_url="https://example.com/"), \
              patch.object(stock_app, "line_store", None), \
              patch.object(stock_app, "line_bot_api", line_api), \
-             patch.object(stock_app, "OPENALICE_API_URL", None, create=True), \
-             patch.object(stock_app, "OPENALICE_API_TOKEN", None, create=True), \
-             patch.object(stock_app, "gemini_model", None), \
-             patch.object(stock_app.requests, "post") as post:
-            stock_app.handle_message(message_event("Papi 今日市場摘要"))
+             patch.object(stock_app, "run_absorb_conversation") as converse:
+            stock_app.handle_message(message_event("Papi 分析 2330", user_id=None))
 
-        post.assert_not_called()
-        self.assertIn("Papi 分析服務尚未設定", line_api.reply_message.call_args.args[1].text)
-
-    def test_papi_command_uses_gemini_fallback_without_openalice_api(self):
-        line_api = Mock()
-        gemini = Mock()
-        gemini.generate_content.return_value.text = "台積電短線偏多，但追價風險升高。"
-        with stock_app.app.test_request_context("/callback", base_url="https://example.com/"), \
-             patch.object(stock_app, "line_store", None), \
-             patch.object(stock_app, "line_bot_api", line_api), \
-             patch.object(stock_app, "OPENALICE_API_URL", None, create=True), \
-             patch.object(stock_app, "OPENALICE_API_TOKEN", None, create=True), \
-             patch.object(stock_app, "gemini_model", gemini), \
-             patch.object(stock_app.requests, "post") as post:
-            stock_app.handle_message(message_event("Papi 分析 2330"))
-
-        post.assert_not_called()
-        gemini.generate_content.assert_called_once()
-        text = line_api.reply_message.call_args.args[1].text
-        self.assertIn("台積電短線偏多", text)
-
-    def test_papi_command_returns_degraded_reply_when_gemini_fails(self):
-        line_api = Mock()
-        gemini = Mock()
-        gemini.generate_content.side_effect = RuntimeError("gemini down")
-        with stock_app.app.test_request_context("/callback", base_url="https://example.com/"), \
-             patch.object(stock_app, "line_store", None), \
-             patch.object(stock_app, "line_bot_api", line_api), \
-             patch.object(stock_app, "OPENALICE_API_URL", None, create=True), \
-             patch.object(stock_app, "OPENALICE_API_TOKEN", None, create=True), \
-             patch.object(stock_app, "gemini_model", gemini), \
-             patch.object(stock_app.requests, "post") as post:
-            stock_app.handle_message(message_event("Papi 分析 2330"))
-
-        post.assert_not_called()
-        text = line_api.reply_message.call_args.args[1].text
-        self.assertIn("Papi AI 摘要暫時失敗", text)
-        self.assertNotIn("服務暫時無法回應", text)
+        converse.assert_not_called()
+        self.assertIn("無法識別 LINE 使用者", line_api.reply_message.call_args.args[1].text)
 
     def test_papi_command_rejects_crypto_requests(self):
         line_api = Mock()
@@ -1490,6 +1471,36 @@ class AnalyzeDateTests(unittest.TestCase):
             result = stock_app._do_analyze("2330")
 
         self.assertEqual(result["as_of"], dates[-1].date().isoformat())
+
+
+    def test_fixed_command_never_calls_conversation_layer(self):
+        line_api = Mock()
+        with stock_app.app.test_request_context("/callback", base_url="https://example.com/"), \
+             patch.object(stock_app, "line_store", None), \
+             patch.object(stock_app, "line_bot_api", line_api), \
+             patch.object(stock_app, "analyze", return_value=sample_data()), \
+             patch.object(stock_app, "run_absorb_conversation") as converse:
+            stock_app.handle_message(message_event("今日盤勢"))
+
+        converse.assert_not_called()
+        line_api.reply_message.assert_called_once()
+
+    def test_unmatched_user_text_uses_shared_absorb_conversation(self):
+        line_api = Mock()
+        user_id = "U0123456789abcdef0123456789abcdef"
+        with stock_app.app.test_request_context("/callback", base_url="https://example.com/"), \
+             patch.object(stock_app, "line_store", None), \
+             patch.object(stock_app, "line_bot_api", line_api), \
+             patch.object(stock_app, "search_stock_code", return_value=(None, None)), \
+             patch.object(
+                 stock_app,
+                 "run_absorb_conversation",
+                 return_value=ConversationAnswer("結論：等待確認"),
+             ) as converse:
+            stock_app.handle_message(message_event("台積電現在能不能追高？", user_id=user_id))
+
+        self.assertIn("等待確認", line_api.reply_message.call_args.args[1].text)
+        self.assertEqual(converse.call_args.kwargs["principal"], f"line:{user_id}")
 
 
 if __name__ == "__main__":
