@@ -33,13 +33,12 @@ $Arguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-
 try {
     # 上游資料來源可能在 stderr 寫入非致命警告；保留到 transcript，
     # 但只依 child PowerShell 的實際 exit code 判定 pipeline 是否失敗。
-    $PreviousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
         & $PowerShellExe @Arguments 2>&1 | Tee-Object -FilePath $LogPath -Append
         $ExitCode = $LASTEXITCODE
     } finally {
-        $ErrorActionPreference = $PreviousErrorActionPreference
+        $ErrorActionPreference = 'Stop'
     }
     if ($ExitCode -ne 0) { throw "Pipeline exited with code $ExitCode" }
     @{ job = $Job; started_at = $StartedAt.ToString('o'); finished_at = [DateTimeOffset]::Now.ToString('o'); success = $true; exit_code = 0; log = $LogPath } |
