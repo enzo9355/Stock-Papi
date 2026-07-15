@@ -13,7 +13,7 @@ if (-not (Test-Path -LiteralPath $TaskWrapper -PathType Leaf)) { throw "Task wra
 $Definitions = @(
   @{ Name='ABSORB-TW-PostClose'; Job='TW-PostClose'; Time='17:10' },
   @{ Name='ABSORB-TW-PreMarket'; Job='TW-PreMarket'; Time='07:30' },
-  @{ Name='ABSORB-FullBacktest'; Job='FullBacktest'; Time='22:30' },
+  @{ Name='ABSORB-FullBacktest'; Job='FullBacktest'; Time='22:30'; RepeatMinutes=1 },
   @{ Name='ABSORB-US-Daily'; Job='US-Daily'; Time='05:30' },
   @{ Name='ABSORB-WeeklyModel'; Job='WeeklyModel'; Time='18:00'; Days=$WeeklyDay },
   @{ Name='ABSORB-ReportUploadRecovery'; Job='ReportUploadRecovery'; Time='09:35' }
@@ -23,6 +23,8 @@ foreach ($Definition in $Definitions) {
   $At = [datetime]::ParseExact($Definition.Time, 'HH:mm', $null)
   $Trigger = if ($Definition.Days) {
     New-ScheduledTaskTrigger -Weekly -DaysOfWeek $Definition.Days -At $At
+  } elseif ($Definition.RepeatMinutes) {
+    New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes $Definition.RepeatMinutes)
   } else {
     New-ScheduledTaskTrigger -Daily -At $At
   }

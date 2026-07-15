@@ -27,8 +27,12 @@ class PipelineSchedulerTests(unittest.TestCase):
         self.assertIn("invoke_pipeline_task.ps1", script)
         self.assertIn("Task wrapper not found", script)
         self.assertIn("New-ScheduledTaskTrigger -Weekly", script)
+        self.assertIn("RepeatMinutes=1", script)
+        self.assertIn("-RepetitionInterval", script)
         self.assertIn(r"D:\AbsorbData", script)
-        self.assertIn("-RequireReportV2", (scripts / "invoke_pipeline_task.ps1").read_text(encoding="utf-8"))
+        wrapper_source = (scripts / "invoke_pipeline_task.ps1").read_text(encoding="utf-8")
+        self.assertIn("-RequireReportV2", wrapper_source)
+        self.assertIn("@('-MaxItems', '500')", wrapper_source)
         post_close = (scripts / "run_tw_post_close_pipeline.ps1").read_text(encoding="utf-8")
         self.assertLess(post_close.index("calendar-check"), post_close.index("--post-close"))
 
