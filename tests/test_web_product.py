@@ -307,6 +307,76 @@ class WebProductTests(unittest.TestCase):
         self.assertEqual(len(payload["top_picks"]), 2)
         self.assertEqual(payload["watchlist_hint"]["title"], "關注與提醒在 LINE 管理")
 
+    @patch.object(stock_app, "analyze")
+    @patch.object(stock_app, "_published_dashboard_snapshot")
+    def test_preview_dashboard_uses_candidate_products(self, load_snapshot, analyze):
+        analyze.return_value = {
+            "price": 23150.0,
+            "prob": 58,
+            "trend": "多頭",
+            "as_of": "2026-07-15",
+            "recommendation": {},
+        }
+        load_snapshot.return_value = {
+            "baseline_status": "initial_backtest_bootstrap",
+            "inference_as_of": "2026-07-15",
+            "backtest_as_of": None,
+            "model_version": "lgbm-5d-v1",
+            "backtest_version": None,
+            "feature_schema_version": 1,
+            "recommendation_policy_version": "recommendation-v1",
+            "presentation": {
+                "model_output_label": "模型方向分數",
+                "calibration_notice": "尚未完成機率校準驗證",
+                "confidence_cap": "low",
+                "strong_action_allowed": False,
+                "performance_endorsement_allowed": False,
+                "top_picks_label": "量化觀察名單",
+            },
+            "sector_snapshot": {
+                "sectors": {
+                    "網通設備": [{
+                        "code": "4906",
+                        "name": "正文",
+                        "prob": 73.7,
+                        "direction_score": 73.7,
+                        "score": 73.7,
+                        "trend": "跌破 MA20",
+                        "as_of": "2026-07-15",
+                        "data_quality_warning": True,
+                    }]
+                }
+            },
+            "heatmap": [{
+                "code": "4906",
+                "count": 6,
+                "direction_score": 59.9,
+                "name": "網通設備",
+                "tone": "steady",
+            }],
+            "daily_focus": ["candidate focus"],
+            "top_picks": [{
+                "code": "4906",
+                "name": "正文",
+                "direction_score": 73.7,
+                "strong_action_allowed": False,
+            }],
+        }
+        with patch.object(
+            stock_app, "PREVIEW_CANDIDATE_PREFIX", "previews/demo"
+        ), patch.object(stock_app, "cached_opportunities", return_value=[]):
+            response = stock_app.app.test_client().get("/api/dashboard")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["inference_as_of"], "2026-07-15")
+        self.assertEqual(payload["model_version"], "lgbm-5d-v1")
+        self.assertEqual(payload["sector_cards"][0]["leader"]["code"], "4906")
+        self.assertEqual(payload["heatmap"][0]["name"], "網通設備")
+        self.assertEqual(payload["daily_focus"], ["candidate focus"])
+        self.assertEqual(payload["top_picks"][0]["code"], "4906")
+        self.assertFalse(payload["top_picks"][0]["strong_action_allowed"])
+
     @patch.object(stock_app, "find_industry_peers", return_value={"category": "半導體", "codes": ["2454"]})
     @patch.object(stock_app, "get_stock_name", return_value="聯發科")
     @patch.object(stock_app, "analyze", return_value=analysis_data())

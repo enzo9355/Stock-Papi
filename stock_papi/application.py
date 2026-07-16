@@ -680,6 +680,20 @@ def cached_opportunities(limit=5):
     )
 
 def dashboard_sector_cards(limit=6):
+    dashboard = _published_dashboard_snapshot()
+    if PREVIEW_CANDIDATE_PREFIX and isinstance(dashboard, dict):
+        sector_snapshot = dashboard.get("sector_snapshot")
+        if isinstance(sector_snapshot, dict):
+            preview_snapshot = dict(sector_snapshot)
+            preview_snapshot["baseline_status"] = dashboard.get("baseline_status")
+            preview_snapshot["presentation"] = dashboard.get("presentation") or {}
+            return _dashboard_sector_cards(
+                lambda _store: preview_snapshot,
+                None,
+                cached_opportunities,
+                _safe_float,
+                limit=limit,
+            )
     return _dashboard_sector_cards(
         load_sector_signal_snapshot,
         line_store,

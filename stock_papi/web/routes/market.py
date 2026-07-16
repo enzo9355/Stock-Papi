@@ -20,6 +20,9 @@ def register_market_routes(
         snapshot = dashboard_snapshot() or {}
         presentation = snapshot.get("presentation") or {}
         baseline_status = snapshot.get("baseline_status")
+        preview_heatmap = snapshot.get("heatmap")
+        preview_top_picks = snapshot.get("top_picks")
+        preview_focus = snapshot.get("daily_focus")
         sectors = [
             {"name": name, "count": len(codes)}
             for name, codes in list(industry_map().items())[:8]
@@ -47,8 +50,17 @@ def register_market_routes(
             },
             "opportunities": cached_opportunities(),
             "sector_cards": sector_cards,
-            "heatmap": build_market_heatmap(sector_cards),
-            "top_picks": dashboard_top_picks(sector_cards),
+            "heatmap": (
+                preview_heatmap
+                if isinstance(preview_heatmap, list)
+                else build_market_heatmap(sector_cards)
+            ),
+            "daily_focus": preview_focus if isinstance(preview_focus, list) else [],
+            "top_picks": (
+                preview_top_picks
+                if isinstance(preview_top_picks, list)
+                else dashboard_top_picks(sector_cards)
+            ),
             "watchlist_hint": {
                 "title": "關注與提醒在 LINE 管理",
                 "steps": ["在 LINE 查詢個股", "點選加入關注", "從提醒管理設定通知"],
@@ -56,6 +68,14 @@ def register_market_routes(
             "sectors": sectors,
             "presentation": presentation,
             "baseline_status": baseline_status,
+            "inference_as_of": snapshot.get("inference_as_of"),
+            "backtest_as_of": snapshot.get("backtest_as_of"),
+            "model_version": snapshot.get("model_version"),
+            "backtest_version": snapshot.get("backtest_version"),
+            "feature_schema_version": snapshot.get("feature_schema_version"),
+            "recommendation_policy_version": snapshot.get(
+                "recommendation_policy_version"
+            ),
         })
 
     def market_insights_api():
