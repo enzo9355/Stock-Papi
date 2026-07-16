@@ -29,6 +29,10 @@ class ReportMetadataV2:
     summary: tuple[str, ...]
     warnings: tuple[str, ...]
     content: dict[str, Any]
+    product_mode: str | None = None
+    observation_start_date: datetime.date | None = None
+    observation_end_date: datetime.date | None = None
+    prediction_capability: dict[str, Any] | None = None
 
     @classmethod
     def from_document(cls, document: dict[str, Any]) -> "ReportMetadataV2":
@@ -51,6 +55,7 @@ class ReportMetadataV2:
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("report metadata v2 日期不合法") from exc
         report_type = document.get("report_type")
+        product_mode = document.get("product_mode")
         manifest = str(document.get("source_manifest") or "")
         manifest_sha = str(document.get("source_manifest_sha256") or "")
         model_versions = document.get("model_versions")
@@ -58,8 +63,23 @@ class ReportMetadataV2:
         summary = document.get("summary")
         warnings = document.get("warnings")
         content = document.get("content")
+        observation_start = None
+        observation_end = None
+        prediction_capability = None
+        if product_mode == "observation":
+            try:
+                observation_start = datetime.date.fromisoformat(
+                    str(document["observation_start_date"])
+                )
+                observation_end = datetime.date.fromisoformat(
+                    str(document["observation_end_date"])
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("report metadata v2 observation dates 不合法") from exc
+            prediction_capability = document.get("prediction_capability")
         if (
             report_type not in REPORT_TYPES
+            or product_mode not in {None, "observation"}
             or document.get("market") != "TW"
             or published.tzinfo is None
             or published.utcoffset() is None
@@ -75,7 +95,6 @@ class ReportMetadataV2:
             is None
             or re.fullmatch(r"[0-9a-f]{64}", manifest_sha) is None
             or not isinstance(model_versions, dict)
-            or not model_versions
             or not all(
                 isinstance(key, str)
                 and 1 <= len(key) <= 100
@@ -92,6 +111,29 @@ class ReportMetadataV2:
             or len(warnings) > 20
             or not all(isinstance(value, str) and len(value) <= 500 for value in warnings)
             or not isinstance(content, dict)
+            or (
+                product_mode != "observation"
+                and not model_versions
+            )
+            or (
+                product_mode == "observation"
+                and (
+                    model_versions
+                    or backtest_as_of is not None
+                    or observation_start != source
+                    or observation_end != applicable
+                    or not isinstance(prediction_capability, dict)
+                    or prediction_capability.get("mode") != "research"
+                    or prediction_capability.get("observation_enabled") is not True
+                    or prediction_capability.get("probability_allowed") is not False
+                    or prediction_capability.get("ranking_allowed") is not False
+                    or prediction_capability.get("strong_action_allowed") is not False
+                    or prediction_capability.get(
+                        "performance_endorsement_allowed"
+                    )
+                    is not False
+                )
+            )
         ):
             raise ValueError("report metadata v2 schema 不合法")
         try:
@@ -115,13 +157,21 @@ class ReportMetadataV2:
             summary=tuple(summary),
             warnings=tuple(warnings),
             content=dict(content),
+            product_mode=product_mode,
+            observation_start_date=observation_start,
+            observation_end_date=observation_end,
+            prediction_capability=(
+                None
+                if prediction_capability is None
+                else dict(prediction_capability)
+            ),
         )
 
     def to_document(self) -> dict[str, Any]:
         timestamp = self.published_at.astimezone(datetime.timezone.utc).isoformat().replace(
             "+00:00", "Z"
         )
-        return {
+        document = {
             "schema_version": 2,
             "kind": "absorb-report",
             "report_type": self.report_type,
@@ -143,6 +193,14 @@ class ReportMetadataV2:
             "warnings": list(self.warnings),
             "content": dict(self.content),
         }
+        if self.product_mode == "observation":
+            document.update(
+                product_mode="observation",
+                observation_start_date=self.observation_start_date.isoformat(),
+                observation_end_date=self.observation_end_date.isoformat(),
+                prediction_capability=dict(self.prediction_capability or {}),
+            )
+        return document
 
 
 @dataclass

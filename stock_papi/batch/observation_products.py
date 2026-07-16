@@ -1,11 +1,14 @@
 """Build deterministic market observations without reading model outputs."""
 
 import datetime
+import hashlib
 import json
 import math
+import os
 import re
 import statistics
 from collections import defaultdict
+from pathlib import Path
 
 
 MIN_SOURCE_COVERAGE = 0.95
@@ -471,7 +474,7 @@ def _daily_focus(market, industries, events):
     return focus
 
 
-def _validate_output(document):
+def validate_observation_dashboard(document):
     try:
         generated = datetime.datetime.fromisoformat(
             str(document["generated_at"]).replace("Z", "+00:00")
@@ -601,4 +604,193 @@ def build_observation_dashboard(
             "prediction_separation": "PASS",
         },
     }
-    return _validate_output(document)
+    return validate_observation_dashboard(document)
+
+
+def _canonical(document):
+    return json.dumps(
+        document,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _write_atomic(path, content):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with temporary.open("wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _write_immutable(path, content):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        if path.read_bytes() != content:
+            raise ValueError("immutable observation candidate conflict")
+        return
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def write_observation_candidate(root, report_metadata, dashboard):
+    from reporting.schemas import ReportMetadataV2
+
+    dashboard = validate_observation_dashboard(dict(dashboard))
+    report = ReportMetadataV2.from_document(dict(report_metadata)).to_document()
+    if (
+        report.get("product_mode") != "observation"
+        or report["source_market_date"] != dashboard["observation_as_of"]
+        or report["source_manifest"] != dashboard["source_manifest"]
+        or report["source_manifest_sha256"]
+        != dashboard["source_manifest_sha256"]
+        or report["prediction_capability"]
+        != dashboard["prediction_capability"]
+    ):
+        raise ValueError("observation candidate identity mismatch")
+    documents = {
+        "dashboard-snapshot.json": dashboard,
+        "post-close-report-v2.json": report,
+    }
+    identity = _canonical(documents)
+    candidate_id = hashlib.sha256(identity).hexdigest()[:16]
+    directory = (
+        Path(root)
+        / "outputs"
+        / "observation"
+        / "candidates"
+        / f"{dashboard['observation_as_of']}-{candidate_id}"
+    )
+    files = {}
+    for name, document in documents.items():
+        content = _canonical(document)
+        _write_immutable(directory / name, content)
+        files[name] = {
+            "sha256": hashlib.sha256(content).hexdigest(),
+            "size": len(content),
+        }
+    manifest = {
+        "schema_version": 1,
+        "kind": "absorb-observation-candidate",
+        "product_mode": "observation",
+        "observation_as_of": dashboard["observation_as_of"],
+        "files": files,
+    }
+    _write_immutable(directory / "candidate.json", _canonical(manifest))
+    return directory
+
+
+def _read_observation_candidate(directory):
+    directory = Path(directory)
+    try:
+        manifest = json.loads(
+            (directory / "candidate.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        raise ValueError("observation candidate manifest is invalid") from exc
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("kind") != "absorb-observation-candidate"
+        or manifest.get("product_mode") != "observation"
+        or not isinstance(manifest.get("files"), dict)
+    ):
+        raise ValueError("observation candidate manifest is invalid")
+    documents = {}
+    for name in ("dashboard-snapshot.json", "post-close-report-v2.json"):
+        expected = manifest["files"].get(name)
+        if not isinstance(expected, dict):
+            raise ValueError("observation candidate manifest is invalid")
+        path = directory / name
+        try:
+            content = path.read_bytes()
+        except OSError as exc:
+            raise ValueError("observation candidate file is unavailable") from exc
+        if (
+            len(content) != expected.get("size")
+            or hashlib.sha256(content).hexdigest() != expected.get("sha256")
+        ):
+            raise ValueError("observation candidate hash mismatch")
+        try:
+            documents[name] = json.loads(content)
+        except ValueError as exc:
+            raise ValueError("observation candidate JSON is invalid") from exc
+    validate_observation_dashboard(documents["dashboard-snapshot.json"])
+    return documents
+
+
+def _prepare_observation_dashboard(root, document):
+    document = validate_observation_dashboard(dict(document))
+    content = _canonical(document)
+    if len(content) > 5_000_000:
+        raise ValueError("observation dashboard is too large")
+    digest = hashlib.sha256(content).hexdigest()
+    publish = Path(root) / "publish" / "dashboard" / "v1"
+    _write_immutable(publish / "objects" / f"{digest}.json", content)
+    latest = {
+        "schema_version": 2,
+        "kind": "absorb-observation-dashboard",
+        "product_mode": "observation",
+        "market": "TW",
+        "observation_as_of": document["observation_as_of"],
+        "generated_at": document["generated_at"],
+        "source_manifest": document["source_manifest"],
+        "source_manifest_sha256": document["source_manifest_sha256"],
+        "path": f"objects/{digest}.json",
+        "sha256": digest,
+        "size": len(content),
+    }
+    return publish / "latest-TW.json", _canonical(latest)
+
+
+def _restore(path, previous):
+    path = Path(path)
+    if previous is None:
+        path.unlink(missing_ok=True)
+    else:
+        _write_atomic(path, previous)
+
+
+def promote_observation_candidate(root, directory):
+    from reporting.publisher import publish_report_v2
+
+    root = Path(root)
+    documents = _read_observation_candidate(directory)
+    dashboard_latest, dashboard_latest_bytes = _prepare_observation_dashboard(
+        root, documents["dashboard-snapshot.json"]
+    )
+    report_publish = root / "publish" / "reports" / "v2"
+    report_index = report_publish / "index-TW.json"
+    report_latest = report_publish / "latest-TW-post_close.json"
+    previous = {
+        report_index: report_index.read_bytes() if report_index.exists() else None,
+        report_latest: report_latest.read_bytes() if report_latest.exists() else None,
+        dashboard_latest: (
+            dashboard_latest.read_bytes() if dashboard_latest.exists() else None
+        ),
+    }
+    try:
+        report_result = publish_report_v2(
+            root, documents["post-close-report-v2.json"]
+        )
+        _write_atomic(dashboard_latest, dashboard_latest_bytes)
+    except Exception:
+        for path, content in previous.items():
+            _restore(path, content)
+        raise
+    return {
+        "report_latest": str(report_result),
+        "dashboard_latest": str(dashboard_latest),
+    }

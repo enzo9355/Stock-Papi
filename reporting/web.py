@@ -123,12 +123,14 @@ def _validate_report_index_v2(document: dict, settings: ReportConfig) -> list[di
         except (KeyError, TypeError, ValueError) as exc:
             raise ReportWebError("報告索引 v2 項目不完整") from exc
         report_type = item.get("report_type")
+        product_mode = item.get("product_mode")
         week_id = item.get("week_id")
         logical_key = (report_type, source, applicable)
         pdf_keys = {"pdf_path", "pdf_sha256", "pdf_size", "page_count"}
         present_pdf_keys = pdf_keys & set(item)
         if (
             report_type not in {"post_close", "pre_market", "weekly_model"}
+            or product_mode not in {None, "observation"}
             or source > applicable
             or published.tzinfo is None
             or source > datetime.date.today()
@@ -150,6 +152,10 @@ def _validate_report_index_v2(document: dict, settings: ReportConfig) -> list[di
             or not all(
                 isinstance(key, str) and type(value) is int and value >= 0
                 for key, value in model_versions.items()
+            )
+            or (
+                product_mode == "observation"
+                and (report_type == "weekly_model" or model_versions)
             )
             or not isinstance(item.get("title"), str)
             or not 1 <= len(item["title"]) <= 200
@@ -263,10 +269,19 @@ def _validate_report_metadata_v2(document: dict, item: dict) -> dict:
         "summary": item["summary"],
         "content_sha256": item["content_sha256"],
     }
+    if item.get("product_mode") is not None:
+        expected["product_mode"] = item["product_mode"]
     if document.get("kind") not in {"absorb-report", "stock-papi-report"}:
         raise ReportWebError("報告 metadata v2 品牌 schema 不合法")
     if any(document.get(key) != value for key, value in expected.items()):
         raise ReportWebError("報告 metadata v2 與索引不一致")
+    if item.get("product_mode") == "observation":
+        try:
+            from reporting.schemas import ReportMetadataV2
+
+            ReportMetadataV2.from_document(document)
+        except ValueError as exc:
+            raise ReportWebError("Observation report metadata 不合法") from exc
     content = document.get("content")
     if not isinstance(content, dict):
         raise ReportWebError("報告 metadata v2 content 不合法")

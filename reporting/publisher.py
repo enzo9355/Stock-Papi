@@ -131,6 +131,8 @@ def publish_report_v2(
         "metadata": metadata_relative,
         "metadata_sha256": metadata_sha,
     }
+    if document.get("product_mode") is not None:
+        entry["product_mode"] = document["product_mode"]
     if document["report_type"] == "weekly_model":
         week_id = document["content"].get("week_id")
         if not isinstance(week_id, str) or re.fullmatch(r"[0-9]{4}-W[0-9]{2}", week_id) is None:
@@ -197,6 +199,8 @@ def publish_report_v2(
         "metadata": metadata_relative,
         "metadata_sha256": metadata_sha,
     }
+    if document.get("product_mode") is not None:
+        latest["product_mode"] = document["product_mode"]
     latest_path = publish / f"latest-TW-{document['report_type']}.json"
     _write_atomic(index_path, index_bytes)
     try:
