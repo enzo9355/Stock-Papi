@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 JOB_TYPES = (
+    "daily_observation",
     "daily_prediction",
     "post_close_report",
     "pre_market_update",
@@ -18,7 +19,12 @@ JOB_TYPES = (
     "upload",
 )
 DAILY_JOB_TYPES = frozenset(
-    {"daily_prediction", "post_close_report", "pre_market_update"}
+    {
+        "daily_observation",
+        "daily_prediction",
+        "post_close_report",
+        "pre_market_update",
+    }
 )
 
 

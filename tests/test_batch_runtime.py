@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from stock_papi.batch.runtime import (
+    DAILY_JOB_TYPES,
     JOB_TYPES,
     JobLockError,
     acquire_job_lock,
@@ -17,6 +18,30 @@ UTC = datetime.timezone.utc
 
 
 class BatchRuntimeTests(unittest.TestCase):
+    def test_daily_observation_has_an_isolated_priority_lock(self):
+        self.assertIn("daily_observation", JOB_TYPES)
+        self.assertIn("daily_observation", DAILY_JOB_TYPES)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checked_at = datetime.datetime(2026, 7, 14, 9, tzinfo=UTC)
+            observation = acquire_job_lock(
+                root,
+                "daily_observation",
+                datetime.date(2026, 7, 14),
+                now=checked_at,
+                pid=100,
+                token="a" * 32,
+            )
+
+            yielded = yield_full_backtest_to_daily(
+                root,
+                boundary="symbol",
+                save_checkpoint=lambda _reason: None,
+            )
+
+            self.assertTrue(yielded)
+            observation.release()
+
     def test_six_jobs_have_disjoint_lock_checkpoint_status_and_output_paths(self):
         with tempfile.TemporaryDirectory() as temporary:
             namespaces = [job_namespace(Path(temporary), job) for job in JOB_TYPES]
