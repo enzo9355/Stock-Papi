@@ -5,6 +5,36 @@ from stock_papi.repositories.gcs import get_allowed_object
 
 
 class GcsRepositoryTests(unittest.TestCase):
+    def test_reader_allows_only_declared_product_prefixes(self):
+        allowed = (
+            "quant/v1/",
+            "reports/v1/",
+            "reports/v2/",
+            "dashboard/v1/",
+            "previews/",
+        )
+        for prefix in allowed:
+            with self.subTest(prefix=prefix):
+                response = Mock(
+                    status_code=200,
+                    headers={},
+                    iter_content=Mock(return_value=[b"ok"]),
+                )
+                get = Mock(return_value=response)
+                self.assertEqual(
+                    get_allowed_object(
+                        f"{prefix}object",
+                        2,
+                        prefix,
+                        bucket="safe-bucket",
+                        enabled=True,
+                        token_provider=lambda: "token",
+                        http_get=get,
+                    ),
+                    b"ok",
+                )
+                response.close.assert_called_once()
+
     def test_reader_requires_allowlisted_prefix_and_enforces_stream_limit(self):
         response = Mock(status_code=200, headers={}, iter_content=Mock(return_value=[b"ab", b"cd"]))
         get = Mock(return_value=response)

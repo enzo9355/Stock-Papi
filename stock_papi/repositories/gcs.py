@@ -2,7 +2,13 @@ import re
 import urllib.parse
 
 
-_ALLOWED_PREFIXES = {"quant/v1/", "reports/v1/"}
+_ALLOWED_PREFIXES = {
+    "quant/v1/",
+    "reports/v1/",
+    "reports/v2/",
+    "dashboard/v1/",
+    "previews/",
+}
 
 
 def get_allowed_object(
