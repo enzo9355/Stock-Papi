@@ -1,0 +1,245 @@
+import copy
+import datetime
+import math
+import unittest
+
+from reporting.schemas import (
+    LoadedReportSource,
+    ReportSourceManifest,
+    StockSnapshot,
+)
+from stock_papi.config.capabilities import PredictionCapabilityState
+from stock_papi.batch.observation_products import build_observation_dashboard
+
+
+FORBIDDEN_KEYS = {
+    "ai_p",
+    "prob",
+    "probability",
+    "direction_score",
+    "score",
+    "recommendation",
+    "top_picks",
+    "model_version",
+    "backtest_version",
+}
+
+
+def _stock(
+    symbol,
+    closes,
+    *,
+    name=None,
+    ai_probability=99.0,
+    rsi=55.0,
+    volume_ratio=1.0,
+    institution_ratio=0.0,
+    foreign_net=0.0,
+    sample_data=False,
+):
+    start = datetime.date(2026, 5, 13)
+    rows = []
+    for index, close in enumerate(closes):
+        rows.append(
+            {
+                "Date": (start + datetime.timedelta(days=index)).isoformat()
+                + "T00:00:00.000",
+                "Close": float(close),
+                "MA20": float(close) - 1.0,
+                "MA60": float(close) - 2.0,
+                "RSI": float(rsi),
+                "VOL_RATIO": float(volume_ratio),
+                "INST_NET_RATIO": float(institution_ratio),
+                "ForeignNet": float(foreign_net),
+                "DATA_PRICE_WARNING": 0.0,
+                "OPTION_DATA_MISSING": 0.0,
+                "AI_P": float(ai_probability),
+            }
+        )
+    return StockSnapshot(
+        symbol=symbol,
+        name=name or symbol,
+        market="TW",
+        as_of=datetime.date.fromisoformat(rows[-1]["Date"][:10]),
+        model_version="must-not-leak",
+        daily=rows,
+        backtest={"accuracy": 100.0},
+        sha256="a" * 64,
+        size=100,
+        sample_data=sample_data,
+    )
+
+
+def _source(stocks, *, coverage=1.0, as_of=datetime.date(2026, 7, 16)):
+    for stock in stocks:
+        stock.as_of = as_of
+        stock.daily[-1]["Date"] = as_of.isoformat() + "T00:00:00.000"
+    return LoadedReportSource(
+        manifest=ReportSourceManifest(
+            schema_version=2,
+            market="TW",
+            generated_at="2026-07-16T10:00:00Z",
+            market_as_of=as_of,
+            universe_count=len(stocks),
+            symbol_count=len(stocks),
+            failure_count=0,
+            failure_rate=0.0,
+            coverage=coverage,
+            failed_symbols=[],
+            manifest_path="manifests/TW-20260716T100000Z-aaaaaaaaaaaa.json",
+            manifest_sha256="a" * 64,
+        ),
+        stocks=stocks,
+    )
+
+
+def _capability():
+    return PredictionCapabilityState(
+        mode="research",
+        observation_enabled=True,
+        probability_allowed=False,
+        ranking_allowed=False,
+        strong_action_allowed=False,
+        performance_endorsement_allowed=False,
+        preview_candidate_prefix=None,
+    )
+
+
+def _walk_keys(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield str(key).lower()
+            yield from _walk_keys(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_keys(item)
+
+
+class ObservationProductsTests(unittest.TestCase):
+    def setUp(self):
+        rising = [100 + index for index in range(65)]
+        falling = [200 - index for index in range(65)]
+        etf = [80 + index * 0.25 for index in range(65)]
+        self.stocks = [
+            _stock(
+                "2330",
+                rising,
+                name="台積電",
+                ai_probability=99,
+                rsi=76,
+                volume_ratio=2.4,
+                institution_ratio=0.03,
+                foreign_net=5000,
+            ),
+            _stock(
+                "2317",
+                falling,
+                name="鴻海",
+                ai_probability=1,
+                rsi=24,
+                volume_ratio=0.7,
+                institution_ratio=-0.03,
+                foreign_net=-4000,
+            ),
+            _stock("0050", etf, name="元大台灣50", ai_probability=88),
+        ]
+        self.industry_map = {
+            "全市場": ["2330", "2317"],
+            "半導體": ["2330"],
+            "電子組裝": ["2317"],
+            "ETF專區": ["0050"],
+        }
+        self.generated_at = datetime.datetime(
+            2026, 7, 16, 10, 30, tzinfo=datetime.timezone.utc
+        )
+
+    def build(self, source=None, *, today=datetime.date(2026, 7, 17)):
+        return build_observation_dashboard(
+            source or _source(copy.deepcopy(self.stocks)),
+            self.industry_map,
+            _capability(),
+            generated_at=self.generated_at,
+            today=today,
+        )
+
+    def test_output_is_independent_of_ai_probability(self):
+        high = _source(copy.deepcopy(self.stocks))
+        low = copy.deepcopy(high)
+        for stock in low.stocks:
+            for row in stock.daily:
+                row["AI_P"] = 1.0 if row["AI_P"] > 50 else 99.0
+
+        self.assertEqual(self.build(high), self.build(low))
+
+    def test_schema_contains_only_observation_domains(self):
+        document = self.build()
+
+        self.assertEqual(document["schema_version"], 2)
+        self.assertEqual(document["kind"], "absorb-observation-dashboard")
+        self.assertEqual(document["product_mode"], "observation")
+        self.assertEqual(document["observation_as_of"], "2026-07-16")
+        self.assertEqual(
+            document["prediction_capability"]["mode"], "research"
+        )
+        self.assertFalse(
+            document["prediction_capability"]["probability_allowed"]
+        )
+        self.assertTrue(document["market_observation"]["advancing_count"] > 0)
+        self.assertTrue(document["market_observation"]["declining_count"] > 0)
+        self.assertEqual(
+            {item["name"] for item in document["industry_observations"]},
+            {"半導體", "電子組裝"},
+        )
+        self.assertTrue(document["heatmap"])
+        self.assertTrue(document["stock_events"])
+        self.assertEqual(document["etf_observations"][0]["symbol"], "0050")
+        self.assertTrue(document["daily_focus"])
+        self.assertEqual(
+            set(_walk_keys(document)).intersection(FORBIDDEN_KEYS), set()
+        )
+
+    def test_industry_display_order_uses_actual_relative_return(self):
+        document = self.build()
+
+        self.assertEqual(
+            [item["name"] for item in document["industry_observations"]],
+            ["半導體", "電子組裝"],
+        )
+        self.assertGreater(
+            document["industry_observations"][0]["relative_return_5d_pct"],
+            document["industry_observations"][1]["relative_return_5d_pct"],
+        )
+        self.assertEqual(
+            document["heatmap"][0]["metric_name"], "relative_return_5d_pct"
+        )
+
+    def test_rejects_sample_low_coverage_stale_and_non_finite_sources(self):
+        sample = _source(copy.deepcopy(self.stocks))
+        sample.stocks[0].sample_data = True
+        with self.assertRaisesRegex(ValueError, "sample"):
+            self.build(sample)
+
+        low_coverage = _source(copy.deepcopy(self.stocks), coverage=0.90)
+        with self.assertRaisesRegex(ValueError, "coverage"):
+            self.build(low_coverage)
+
+        stale = _source(
+            copy.deepcopy(self.stocks), as_of=datetime.date(2026, 7, 1)
+        )
+        with self.assertRaisesRegex(ValueError, "stale"):
+            self.build(stale, today=datetime.date(2026, 7, 17))
+
+        non_finite = _source(copy.deepcopy(self.stocks))
+        non_finite.stocks[0].daily[-1]["Close"] = math.nan
+        with self.assertRaisesRegex(ValueError, "finite"):
+            self.build(non_finite)
+
+    def test_output_order_is_deterministic(self):
+        first = self.build(_source(copy.deepcopy(self.stocks)))
+        second = self.build(_source(list(reversed(copy.deepcopy(self.stocks)))))
+
+        self.assertEqual(first, second)
+
+
+if __name__ == "__main__":
+    unittest.main()

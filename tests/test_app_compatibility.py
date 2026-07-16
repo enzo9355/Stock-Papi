@@ -1,6 +1,7 @@
 import unittest
 
 import app as stock_app
+from stock_papi.config.capabilities import PredictionCapabilityState
 
 
 COMPATIBILITY_EXPORTS = (
@@ -19,6 +20,7 @@ COMPATIBILITY_EXPORTS = (
     "handle_message",
     "handle_postback",
     "run_alert_checks",
+    "prediction_capability",
 )
 
 
@@ -27,6 +29,12 @@ class AppCompatibilityTests(unittest.TestCase):
         for name in COMPATIBILITY_EXPORTS:
             with self.subTest(name=name):
                 self.assertTrue(hasattr(stock_app, name), name)
+
+    def test_route_dependencies_expose_central_prediction_capability(self):
+        capability = stock_app.route_dependencies()["prediction_capability"]
+
+        self.assertIs(capability, stock_app.prediction_capability)
+        self.assertIsInstance(capability, PredictionCapabilityState)
 
 
 if __name__ == "__main__":

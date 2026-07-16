@@ -54,6 +54,7 @@ from stock_papi.runtime import (
     _LazyModule,
     get_gcp_access_token as _runtime_get_gcp_access_token,
 )
+from stock_papi.config.capabilities import PredictionCapabilityState
 from stock_papi.shared.formatting import clamp as _clamp
 from stock_papi.shared.formatting import format_sentiment_summary as _format_sentiment_summary
 from stock_papi.shared.formatting import safe_float as _safe_float
@@ -283,7 +284,8 @@ line_auth_store = FirestoreAuthStore(GCP_PROJECT_ID) if GCP_PROJECT_ID else None
 gemini_model = _LazyGeminiModel(GEMINI_API_KEY) if GEMINI_API_KEY else None
 conversation_context_store = MemoryContextStore(ttl_seconds=1800)
 _conversation_provider_cache = {"model": None, "provider": None}
-PREVIEW_CANDIDATE_PREFIX = os.getenv("ABSORB_PREVIEW_CANDIDATE_PREFIX", "").strip()
+prediction_capability = PredictionCapabilityState.from_environment()
+PREVIEW_CANDIDATE_PREFIX = prediction_capability.preview_candidate_prefix or ""
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1188,6 +1190,7 @@ def route_dependencies():
         "analyze": lambda code: analyze(code),
         "dashboard_sector_cards": lambda: dashboard_sector_cards(),
         "dashboard_snapshot": lambda: _published_dashboard_snapshot(),
+        "prediction_capability": prediction_capability,
         "cached_opportunities": lambda: cached_opportunities(),
         "build_market_heatmap": build_market_heatmap,
         "dashboard_top_picks": dashboard_top_picks,
