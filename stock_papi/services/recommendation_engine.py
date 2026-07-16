@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 
 Scope = Literal["market", "industry", "stock"]
+RECOMMENDATION_POLICY_VERSION = "recommendation-v1"
 
 
 @dataclass(frozen=True)

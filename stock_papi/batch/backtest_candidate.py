@@ -14,6 +14,7 @@ from pathlib import Path
 
 from stock_papi.batch.backtest_store import BacktestStore, BacktestStoreError
 from stock_papi.batch.runtime import job_namespace
+from stock_papi.services.recommendation_engine import RECOMMENDATION_POLICY_VERSION
 
 
 def _canonical(document):
@@ -195,6 +196,7 @@ def build_candidate(root, *, git_sha, now=None):
         "dataset_sha256": checkpoint["dataset_sha256"],
         "model_version": checkpoint["model_version"],
         "feature_schema_version": checkpoint["feature_schema_version"],
+        "recommendation_policy_version": RECOMMENDATION_POLICY_VERSION,
         "cutoff": cutoff.isoformat(),
         "data_start": predictions[0]["source_market_date"],
         "data_end": predictions[-1]["source_market_date"],

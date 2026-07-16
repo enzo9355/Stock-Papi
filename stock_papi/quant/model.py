@@ -4,6 +4,7 @@ from stock_papi.quant.constants import MODEL_FEATURES
 
 
 MODEL_VERSION = "lgbm-5d-v1"
+FEATURE_SCHEMA_VERSION = 1
 MODEL_SETTINGS = {
     "n_estimators": 80,
     "learning_rate": 0.05,

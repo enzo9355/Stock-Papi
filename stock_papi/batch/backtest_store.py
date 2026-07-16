@@ -70,6 +70,8 @@ def _validate_candidate(document, market):
         or not 1 <= len(document["model_version"]) <= 100
         or type(document.get("feature_schema_version")) is not int
         or document["feature_schema_version"] < 1
+        or not isinstance(document.get("recommendation_policy_version"), str)
+        or not 1 <= len(document["recommendation_policy_version"]) <= 100
         or not start <= end <= cutoff
         or type(document.get("fold_count")) is not int
         or document["fold_count"] < 1
@@ -179,6 +181,10 @@ class BacktestStore:
             "candidate_path": f"backtests/v1/candidates/{digest}.json",
             "candidate_sha256": digest,
             "model_version": candidate["model_version"],
+            "feature_schema_version": candidate["feature_schema_version"],
+            "recommendation_policy_version": candidate[
+                "recommendation_policy_version"
+            ],
             "dataset_sha256": candidate["dataset_sha256"],
             "cutoff": candidate["cutoff"],
             "promoted_at": _timestamp(promoted_at),
@@ -205,6 +211,10 @@ class BacktestStore:
         candidate = self._candidate(digest)
         if (
             pointer.get("model_version") != candidate["model_version"]
+            or pointer.get("feature_schema_version")
+            != candidate["feature_schema_version"]
+            or pointer.get("recommendation_policy_version")
+            != candidate["recommendation_policy_version"]
             or pointer.get("dataset_sha256") != candidate["dataset_sha256"]
             or pointer.get("cutoff") != candidate["cutoff"]
         ):
@@ -212,8 +222,19 @@ class BacktestStore:
         return {**candidate, **pointer}
 
 
-def assess_backtest_compatibility(backtest, *, expected_model_version):
-    if not isinstance(backtest, dict) or not isinstance(expected_model_version, str):
+def assess_backtest_compatibility(
+    backtest,
+    *,
+    expected_model_version,
+    expected_feature_schema_version=1,
+    expected_recommendation_policy_version="recommendation-v1",
+):
+    if (
+        not isinstance(backtest, dict)
+        or not isinstance(expected_model_version, str)
+        or type(expected_feature_schema_version) is not int
+        or not isinstance(expected_recommendation_policy_version, str)
+    ):
         raise BacktestStoreError("invalid compatibility input")
     gates = backtest.get("gates")
     try:
@@ -238,17 +259,32 @@ def assess_backtest_compatibility(backtest, *, expected_model_version):
             "confidence_cap": "low",
             "strong_action_allowed": False,
             "reason": "backtest_not_promoted",
+            "mismatch_fields": ["promotion_gates"],
         }
-    if backtest.get("model_version") == expected_model_version:
+    mismatches = []
+    if backtest.get("model_version") != expected_model_version:
+        mismatches.append("model_version")
+    if backtest.get("feature_schema_version") != expected_feature_schema_version:
+        mismatches.append("feature_schema_version")
+    if (
+        backtest.get("recommendation_policy_version")
+        != expected_recommendation_policy_version
+    ):
+        mismatches.append("recommendation_policy_version")
+    if not mismatches:
         return {
             "compatible": True,
             "confidence_cap": "normal",
             "strong_action_allowed": True,
             "reason": None,
+            "mismatch_fields": [],
+            "backtest_as_of": backtest.get("cutoff"),
+            "backtest_version": backtest.get("candidate_sha256"),
         }
     return {
         "compatible": False,
         "confidence_cap": "low",
         "strong_action_allowed": False,
-        "reason": "model_version_mismatch",
+        "reason": f"{mismatches[0]}_mismatch",
+        "mismatch_fields": mismatches,
     }

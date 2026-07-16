@@ -24,6 +24,7 @@ def candidate():
         "dataset_sha256": "a" * 64,
         "model_version": "lgbm-5d-v1",
         "feature_schema_version": 1,
+        "recommendation_policy_version": "recommendation-v1",
         "cutoff": "2026-07-14",
         "data_start": "2024-01-02",
         "data_end": "2026-07-14",
@@ -145,7 +146,7 @@ class BacktestWorkerTests(unittest.TestCase):
             self.assertEqual(store.load_latest()["candidate_sha256"], digest)
             self.assertEqual(promoted["model_version"], "lgbm-5d-v1")
 
-    def test_model_version_mismatch_caps_confidence_and_blocks_strong_action(self):
+    def test_version_mismatch_caps_confidence_and_blocks_strong_action(self):
         compatible = assess_backtest_compatibility(
             promoted_candidate(), expected_model_version="lgbm-5d-v1"
         )
@@ -158,6 +159,12 @@ class BacktestWorkerTests(unittest.TestCase):
         self.assertFalse(mismatch["strong_action_allowed"])
         self.assertEqual(mismatch["confidence_cap"], "low")
         self.assertEqual(mismatch["reason"], "model_version_mismatch")
+        feature_mismatch = assess_backtest_compatibility(
+            promoted_candidate(),
+            expected_model_version="lgbm-5d-v1",
+            expected_feature_schema_version=2,
+        )
+        self.assertEqual(feature_mismatch["mismatch_fields"], ["feature_schema_version"])
 
 
 if __name__ == "__main__":

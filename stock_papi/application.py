@@ -129,6 +129,10 @@ from stock_papi.integrations.news.provider import (
     parse_stocktwits_sentiment as _parse_stocktwits_sentiment,
 )
 from stock_papi.repositories.gcs import get_allowed_object
+from stock_papi.repositories.dashboard_snapshots import (
+    DASHBOARD_CACHE as _DASHBOARD_CACHE,
+    load_dashboard_snapshot,
+)
 from stock_papi.repositories.market_insights import (
     MARKET_INSIGHTS_CACHE as _MARKET_INSIGHTS_CACHE,
     load_market_insights,
@@ -413,6 +417,18 @@ def _gcs_get_report_object(object_name, max_bytes):
 def _gcs_get_report_v2_object(object_name, max_bytes):
     """只允許讀取 reports/v2 私有物件。"""
     return _gcs_get_allowed_object(object_name, max_bytes, "reports/v2/")
+
+
+def _gcs_get_dashboard_object(object_name, max_bytes):
+    return _gcs_get_allowed_object(object_name, max_bytes, "dashboard/v1/")
+
+
+def _published_dashboard_snapshot(today=None):
+    return load_dashboard_snapshot(
+        today=today,
+        load_object=_gcs_get_dashboard_object,
+        cache=_DASHBOARD_CACHE,
+    )
 
 
 def _published_report_index():
@@ -959,6 +975,9 @@ def save_sector_signal_snapshot(store, snapshot):
 
 
 def load_sector_signal_snapshot(store):
+    dashboard = _published_dashboard_snapshot()
+    if dashboard is not None:
+        return dashboard["sector_snapshot"]
     return _line_load_sector_signal_snapshot(store)
 
 

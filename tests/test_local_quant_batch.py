@@ -514,6 +514,9 @@ File Creation Time: 07082026||||||
         )
         promoted = {
             "model_version": "lgbm-5d-v1",
+            "feature_schema_version": 1,
+            "recommendation_policy_version": "recommendation-v1",
+            "cutoff": "2026-07-09",
             "accuracy": 55.0,
             "candidate_sha256": "a" * 64,
             "promoted_at": "2026-07-16T10:00:00Z",
@@ -542,6 +545,39 @@ File Creation Time: 07082026||||||
         self.assertEqual(payload["latest"]["AI_P"], 64.5)
         self.assertEqual(payload["backtest"], promoted)
         self.assertTrue(payload["backtest_compatibility"]["strong_action_allowed"])
+
+    def test_taiwan_snapshot_can_run_explicit_degraded_bootstrap_without_backtest_metrics(self):
+        frame = pd.DataFrame(
+            {"Close": [100.0, 101.0], "MA20": [99.0, 99.5], "AI_P": [None, None]},
+            index=pd.to_datetime(["2026-07-15", "2026-07-16"]),
+        )
+        frame.index.name = "Date"
+        pipeline = SimpleNamespace(
+            get_data=lambda _symbol, _days: frame.copy(),
+            calc_all=lambda data: data,
+            run_latest_inference=lambda data: data.__setitem__("AI_P", [62.0]) or {
+                "model_version": "lgbm-5d-v1",
+                "probability": 62.0,
+            },
+            run_ai_engine=lambda _data: self.fail("bootstrap must not walk forward"),
+            get_stock_name=lambda symbol: symbol,
+            PREDICTION_HORIZON=5,
+        )
+        payload = build_stock_snapshot(
+            pipeline,
+            "TW",
+            "2330",
+            target_market_date=datetime.date(2026, 7, 15),
+            degraded_bootstrap=True,
+        )
+        self.assertEqual(payload["backtest"], {})
+        self.assertEqual(payload["as_of"], "2026-07-15")
+        self.assertEqual(len(payload["daily"]), 1)
+        self.assertEqual(
+            payload["backtest_compatibility"]["reason"],
+            "initial_backtest_bootstrap",
+        )
+        self.assertFalse(payload["backtest_compatibility"]["strong_action_allowed"])
 
     def test_us_snapshot_reuses_existing_pipeline(self):
         frame = pd.DataFrame(

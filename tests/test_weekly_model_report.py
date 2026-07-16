@@ -14,6 +14,8 @@ def promoted_backtest():
         "promoted_at": "2026-07-14T11:00:00Z",
         "gates": {gate: True for gate in REQUIRED_PROMOTION_GATES},
         "model_version": "lgbm-5d-v1",
+        "feature_schema_version": 1,
+        "recommendation_policy_version": "recommendation-v1",
         "dataset_manifest": "quant/v1/manifests/TW-20260714T090000Z-aaaaaaaaaaaa.json",
         "dataset_sha256": "a" * 64,
         "cutoff": "2026-07-14",

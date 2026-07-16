@@ -2,7 +2,8 @@
 param(
     [string]$DataRoot = 'D:\AbsorbData',
     [string]$Bucket = 'line-stock-bot-498908-quant-snapshots',
-    [switch]$RequireReportV2
+    [switch]$RequireReportV2,
+    [switch]$RequireDashboard
 )
 
 $ErrorActionPreference = 'Stop'
@@ -236,6 +237,43 @@ function Publish-ReportsV2 {
     return $Uploaded.ToArray()
 }
 
+function Publish-DashboardV1 {
+    $Root = Join-Path $DataRoot 'publish\dashboard\v1'
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return $false }
+    $Resolved = (Resolve-Path -LiteralPath $Root).Path
+    if (((Get-Item -LiteralPath $Resolved).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Dashboard root must not be a reparse point' }
+    $LatestPath = (Resolve-Path -LiteralPath (Join-Path $Resolved 'latest-TW.json')).Path
+    $Latest = Get-Content -LiteralPath $LatestPath -Raw -Encoding utf8 | ConvertFrom-Json
+    $Relative = [string]$Latest.path
+    if (
+        $Latest.schema_version -ne 1 -or $Latest.kind -ne 'absorb-daily-dashboard' -or
+        $Latest.market -ne 'TW' -or $Relative -notmatch '^objects/[0-9a-f]{64}\.json$' -or
+        [string]$Latest.sha256 -notmatch '^[0-9a-f]{64}$' -or [long]$Latest.size -le 0 -or [long]$Latest.size -gt 5MB
+    ) { throw 'Invalid dashboard latest pointer' }
+    $ObjectPath = (Resolve-Path -LiteralPath (Join-Path $Resolved $Relative)).Path
+    if (-not $ObjectPath.StartsWith($Resolved + [IO.Path]::DirectorySeparatorChar)) { throw 'Dashboard object escaped publish root' }
+    $Object = Get-Item -LiteralPath $ObjectPath
+    if (($Object.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $Object.Length -ne [long]$Latest.size) { throw 'Invalid dashboard object' }
+    $Digest = (Get-FileHash -LiteralPath $ObjectPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($Digest -ne [string]$Latest.sha256 -or $Relative -ne "objects/$Digest.json") { throw 'Dashboard object hash mismatch' }
+    $Document = Get-Content -LiteralPath $ObjectPath -Raw -Encoding utf8 | ConvertFrom-Json
+    if (
+        $Document.schema_version -ne 1 -or $Document.kind -ne 'absorb-daily-dashboard' -or
+        $Document.market -ne 'TW' -or [string]$Document.inference_as_of -ne [string]$Latest.inference_as_of -or
+        -not ($Document.sector_snapshot.sectors -is [psobject]) -or
+        $null -eq $Document.heatmap -or $null -eq $Document.daily_focus -or $null -eq $Document.top_picks
+    ) { throw 'Dashboard object schema mismatch' }
+    $SourceManifest = [string]$Document.source_manifest
+    if ($SourceManifest -notmatch '^quant/v1/manifests/TW-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}\.json$') { throw 'Invalid dashboard source manifest' }
+    $SourcePath = Assert-AllowlistedPath (Join-Path $ResolvedRoot $SourceManifest.Substring('quant/v1/'.Length))
+    if ((Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash.ToLowerInvariant() -ne [string]$Document.source_manifest_sha256) { throw 'Dashboard source manifest hash mismatch' }
+    Invoke-GcloudCopy $ObjectPath "gs://$Bucket/dashboard/v1/$Relative" -NoClobber
+    Invoke-GcloudCopy $LatestPath "gs://$Bucket/dashboard/v1/latest-TW.json"
+    $Remote = Get-GcloudJson "gs://$Bucket/dashboard/v1/latest-TW.json"
+    if ([string]$Remote.sha256 -ne $Digest -or [string]$Remote.inference_as_of -ne [string]$Document.inference_as_of) { throw 'Dashboard remote read-back mismatch' }
+    return $true
+}
+
 
 try {
     $InsightsUploaded = $false
@@ -421,6 +459,16 @@ try {
         Send-ReportUploadFailureNotification "報告 v2 上傳失敗：$ReportV2UploadError"
     }
 
+    $DashboardUploaded = $false
+    $DashboardUploadError = $null
+    try {
+        $DashboardUploaded = Publish-DashboardV1
+    } catch {
+        $DashboardUploadError = $_.Exception.Message
+        Write-Warning "Dashboard 上傳失敗：$DashboardUploadError"
+        Send-ReportUploadFailureNotification "Dashboard 上傳失敗：$DashboardUploadError"
+    }
+
     $Status = @{
         uploaded_at = [DateTimeOffset]::Now.ToString('o')
         markets = $UploadedMarkets
@@ -429,11 +477,16 @@ try {
         report_error = $ReportUploadError
         report_v2_uploaded_types = $ReportV2UploadedTypes
         report_v2_error = $ReportV2UploadError
+        dashboard_uploaded = $DashboardUploaded
+        dashboard_error = $DashboardUploadError
         bucket = $Bucket
     } | ConvertTo-Json -Compress
     Set-Content -LiteralPath (Join-Path $DataRoot 'logs\upload-status.json') -Value $Status -Encoding utf8
     if ($RequireReportV2 -and ($ReportV2UploadError -or $ReportV2UploadedTypes.Count -eq 0)) {
         throw 'Required report v2 upload or remote verification failed'
+    }
+    if ($RequireDashboard -and ($DashboardUploadError -or -not $DashboardUploaded)) {
+        throw 'Required dashboard upload or remote verification failed'
     }
     Write-Output "Uploaded quant snapshots: $($UploadedMarkets -join ',')"
 

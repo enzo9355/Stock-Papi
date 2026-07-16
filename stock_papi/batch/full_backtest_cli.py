@@ -44,12 +44,14 @@ def main(argv=None):
         raise ValueError("full backtest requires one source model version")
     model_version = next(iter(versions))
     items = tuple(stock.symbol for stock in source.stocks)
+    from stock_papi.quant.model import FEATURE_SCHEMA_VERSION
+
     worker = FullBacktestWorker(
         args.root,
         dataset_manifest=f"quant/v1/{manifest.manifest_path}",
         dataset_sha256=manifest.manifest_sha256,
         model_version=model_version,
-        feature_schema_version=1,
+        feature_schema_version=FEATURE_SCHEMA_VERSION,
         cutoff=manifest.market_as_of,
         items=items,
     )

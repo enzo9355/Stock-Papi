@@ -55,7 +55,7 @@ class ReportBackfillTests(unittest.TestCase):
             source=source,
             generated_at=datetime.datetime(2026, 7, 17, 10, tzinfo=datetime.timezone.utc),
             warnings=[],
-            summary=["市場整理"],
+            summary=["市場整理", "長" * 600],
             model_versions={"lgbm-5d-v1": 100},
         )
         import reporting.v2_builder as builder
@@ -69,6 +69,7 @@ class ReportBackfillTests(unittest.TestCase):
 
         self.assertEqual(metadata["applicable_trading_date"], "2026-07-21")
         self.assertEqual(metadata["forecast_end_date"], "2026-07-27")
+        self.assertEqual(len(metadata["summary"][1]), 500)
         self.assertEqual(ReportMetadataV2.from_document(metadata).source_market_date, datetime.date(2026, 7, 17))
 
 

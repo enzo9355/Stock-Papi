@@ -20,7 +20,7 @@ class ReportMetadataV2:
     published_at: datetime.datetime
     forecast_start_date: datetime.date
     forecast_end_date: datetime.date
-    backtest_as_of: datetime.date
+    backtest_as_of: datetime.date | None
     data_as_of: datetime.date
     source_manifest: str
     source_manifest_sha256: str
@@ -39,7 +39,11 @@ class ReportMetadataV2:
             applicable = datetime.date.fromisoformat(str(document["applicable_trading_date"]))
             forecast_start = datetime.date.fromisoformat(str(document["forecast_start_date"]))
             forecast_end = datetime.date.fromisoformat(str(document["forecast_end_date"]))
-            backtest_as_of = datetime.date.fromisoformat(str(document["backtest_as_of"]))
+            backtest_as_of = (
+                None
+                if document.get("backtest_as_of") is None
+                else datetime.date.fromisoformat(str(document["backtest_as_of"]))
+            )
             data_as_of = datetime.date.fromisoformat(str(document["data_as_of"]))
             published = datetime.datetime.fromisoformat(
                 str(document["published_at"]).replace("Z", "+00:00")
@@ -62,7 +66,7 @@ class ReportMetadataV2:
             or source > applicable
             or forecast_start != applicable
             or forecast_end < forecast_start
-            or backtest_as_of > source
+            or (backtest_as_of is not None and backtest_as_of > source)
             or data_as_of > source
             or re.fullmatch(
                 r"quant/v1/manifests/TW-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}\.json",
@@ -127,7 +131,9 @@ class ReportMetadataV2:
             "published_at": timestamp,
             "forecast_start_date": self.forecast_start_date.isoformat(),
             "forecast_end_date": self.forecast_end_date.isoformat(),
-            "backtest_as_of": self.backtest_as_of.isoformat(),
+            "backtest_as_of": (
+                self.backtest_as_of.isoformat() if self.backtest_as_of else None
+            ),
             "data_as_of": self.data_as_of.isoformat(),
             "source_manifest": self.source_manifest,
             "source_manifest_sha256": self.source_manifest_sha256,

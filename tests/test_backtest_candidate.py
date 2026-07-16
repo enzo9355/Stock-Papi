@@ -66,6 +66,7 @@ class BacktestCandidateTests(unittest.TestCase):
 
             store = BacktestStore(root, "TW")
             self.assertTrue(store.candidate_path(candidate["candidate_sha256"]).exists())
+            self.assertEqual(candidate["recommendation_policy_version"], "recommendation-v1")
             self.assertIsNone(store.load_latest())
             oos_path = store.root / "oos" / f"{candidate['oos_predictions_sha256']}.json.gz"
             with gzip.open(oos_path, "rt", encoding="utf-8") as stream:
