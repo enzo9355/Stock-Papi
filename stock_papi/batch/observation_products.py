@@ -489,6 +489,16 @@ def validate_observation_dashboard(document):
         or document.get("market") != "TW"
         or generated.tzinfo is None
         or generated.utcoffset() is None
+        or re.fullmatch(
+            r"quant/v1/manifests/TW-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}\.json",
+            str(document.get("source_manifest") or ""),
+        )
+        is None
+        or re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(document.get("source_manifest_sha256") or ""),
+        )
+        is None
         or not isinstance(document.get("prediction_capability"), dict)
         or not isinstance(document.get("market_observation"), dict)
         or not isinstance(document.get("industry_observations"), list)
@@ -500,6 +510,16 @@ def validate_observation_dashboard(document):
         or not isinstance(document.get("gates"), dict)
     ):
         raise ValueError("observation dashboard schema is invalid")
+    capability = document["prediction_capability"]
+    if (
+        capability.get("mode") != "research"
+        or capability.get("observation_enabled") is not True
+        or capability.get("probability_allowed") is not False
+        or capability.get("ranking_allowed") is not False
+        or capability.get("strong_action_allowed") is not False
+        or capability.get("performance_endorsement_allowed") is not False
+    ):
+        raise ValueError("observation dashboard capability is invalid")
 
     def walk(value):
         if isinstance(value, dict):

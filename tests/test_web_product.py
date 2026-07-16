@@ -250,62 +250,86 @@ class WebProductTests(unittest.TestCase):
                 self.assertIn(marker, html)
 
     @patch.object(stock_app, "analyze")
-    @patch.object(stock_app, "load_sector_signal_snapshot")
-    def test_dashboard_api_returns_sector_cards_and_top_picks(self, load_snapshot, analyze):
-        analyze.return_value = {
-            "price": 23150.0,
-            "prob": 58,
-            "trend": "多頭",
-            "as_of": "2026-07-03",
-            "s_status": "偏多",
-            "s_score": 63.0,
-            "news_confidence": "中",
-            "recommendation": {
-                "action": "控制追價", "level": "neutral",
-                "headline": "市場訊號尚未形成一致優勢",
-                "confidence": "可信度中等",
-                "supporting_reasons": ["五日上漲機率 58%", "站上 MA20"],
-                "risk_reasons": ["量能不足"],
-                "data_as_of": "2026-07-03",
-            },
-        }
+    @patch.object(stock_app, "_published_dashboard_snapshot")
+    def test_dashboard_api_returns_verified_observation_without_runtime_analysis(
+        self, load_snapshot, analyze
+    ):
         load_snapshot.return_value = {
-            "sectors": {
-                "半導體": [{
-                    "code": "2330", "name": "台積電", "prob": 72,
-                    "trend": "多頭", "score": 91.2, "as_of": "2026-06-28", "foreign_net_5": 12000,
-                }],
-                "AI 伺服器": [{
-                    "code": "6669", "name": "緯穎", "prob": 69,
-                    "trend": "多頭", "score": 88.5, "as_of": "2026-06-28", "foreign_net_5": 5400,
-                }],
-            }
+            "schema_version": 2,
+            "kind": "absorb-observation-dashboard",
+            "product_mode": "observation",
+            "market": "TW",
+            "observation_as_of": "2026-07-15",
+            "generated_at": "2026-07-16T06:35:08Z",
+            "source_manifest": "quant/v1/manifests/TW-20260716T063508Z-aaaaaaaaaaaa.json",
+            "source_manifest_sha256": "a" * 64,
+            "prediction_capability": {
+                "mode": "research",
+                "observation_enabled": True,
+                "probability_allowed": False,
+                "ranking_allowed": False,
+                "strong_action_allowed": False,
+                "performance_endorsement_allowed": False,
+            },
+            "market_observation": {
+                "return_1d_pct": 0.8,
+                "advancing_count": 1200,
+                "declining_count": 700,
+                "risk_state": "normal",
+            },
+            "industry_observations": [
+                {
+                    "name": "半導體",
+                    "relative_return_5d_pct": 1.2,
+                    "display_order": 1,
+                }
+            ],
+            "heatmap": [
+                {
+                    "name": "半導體",
+                    "metric_name": "relative_return_5d_pct",
+                    "metric_value_pct": 1.2,
+                    "tone": "steady",
+                }
+            ],
+            "daily_focus": ["市場風險狀態：normal"],
+            "stock_events": [],
+            "etf_observations": [],
+            "data_quality": {"coverage": 0.997},
+            "gates": {"prediction_separation": "PASS"},
         }
-        previous = stock_app._SYSTEM_CACHE.copy()
-        self.addCleanup(stock_app._SYSTEM_CACHE.update, previous)
-        self.addCleanup(stock_app._SYSTEM_CACHE.clear)
-        stock_app._SYSTEM_CACHE.clear()
-        now = time.time()
-        stock_app._SYSTEM_CACHE.update({
-            "2330": ({"code": "2330", "name": "台積電", "prob": 72}, now),
-            "2317": ({"code": "2317", "name": "鴻海", "prob": 61}, now),
-        })
 
         response = stock_app.app.test_client().get("/api/dashboard")
 
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
-        self.assertEqual(payload["market"]["price"], 23150.0)
-        self.assertEqual(payload["market"]["as_of"], "2026-07-03")
-        self.assertEqual(payload["market"]["sentiment_status"], "偏多")
-        self.assertEqual(payload["market"]["recommendation"]["action"], "控制追價")
-        self.assertEqual([item["code"] for item in payload["opportunities"]], ["2330", "2317"])
-        self.assertEqual(payload["sector_cards"][0]["name"], "半導體")
-        self.assertEqual(payload["sector_cards"][0]["leader"]["code"], "2330")
+        analyze.assert_not_called()
+        self.assertEqual(payload["product_mode"], "observation")
+        self.assertEqual(payload["observation_as_of"], "2026-07-15")
+        self.assertEqual(payload["market_observation"]["advancing_count"], 1200)
+        self.assertEqual(payload["industry_observations"][0]["name"], "半導體")
         self.assertEqual(payload["heatmap"][0]["name"], "半導體")
-        self.assertEqual(payload["heatmap"][0]["tone"], "hot")
-        self.assertEqual(len(payload["top_picks"]), 2)
-        self.assertEqual(payload["watchlist_hint"]["title"], "關注與提醒在 LINE 管理")
+        self.assertEqual(payload["prediction_status"], "AI 預測研究中")
+        self.assertNotIn("top_picks", payload)
+        self.assertNotIn("opportunities", payload)
+
+    @patch.object(stock_app, "analyze")
+    @patch.object(stock_app, "_published_dashboard_snapshot", return_value=None)
+    def test_dashboard_api_fails_closed_without_snapshot(
+        self, _load_snapshot, analyze
+    ):
+        response = stock_app.app.test_client().get("/api/dashboard")
+
+        self.assertEqual(response.status_code, 503)
+        analyze.assert_not_called()
+        self.assertEqual(
+            response.get_json()["status"], "observation_unavailable"
+        )
+
+    def test_preview_report_is_not_public_without_preview_prefix(self):
+        response = stock_app.app.test_client().get("/preview/report")
+
+        self.assertEqual(response.status_code, 404)
 
     @patch.object(stock_app, "analyze")
     @patch.object(stock_app, "_published_dashboard_snapshot")

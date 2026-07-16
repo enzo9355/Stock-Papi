@@ -5,7 +5,9 @@ from flask import abort, render_template, request
 from reporting.exceptions import ReportWebError
 
 
-def register_dashboard_page(app, *, load_report_index_v2, load_dashboard_snapshot):
+def register_dashboard_page(
+    app, *, load_report_index_v2, load_dashboard_snapshot, preview_enabled=False
+):
     def dashboard_page():
         try:
             reports = load_report_index_v2() or []
@@ -28,6 +30,8 @@ def register_dashboard_page(app, *, load_report_index_v2, load_dashboard_snapsho
         )
 
     def preview_report_page():
+        if not preview_enabled:
+            abort(404)
         snapshot = load_dashboard_snapshot()
         if not isinstance(snapshot, dict):
             abort(404)

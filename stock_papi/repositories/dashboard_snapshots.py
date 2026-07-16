@@ -7,6 +7,9 @@ import json
 import re
 import time
 
+from stock_papi.batch.observation_products import (
+    validate_observation_dashboard,
+)
 
 DASHBOARD_CACHE = {}
 MAX_DASHBOARD_BYTES = 5_000_000
@@ -25,11 +28,14 @@ def load_dashboard_snapshot(today=None, *, load_object, cache=DASHBOARD_CACHE):
         path = str(latest["path"])
         digest = str(latest["sha256"])
         size = latest["size"]
-        inference = datetime.date.fromisoformat(str(latest["inference_as_of"]))
-        age = (today or datetime.date.today()) - inference
+        observation_as_of = datetime.date.fromisoformat(
+            str(latest["observation_as_of"])
+        )
+        age = (today or datetime.date.today()) - observation_as_of
         if (
-            latest.get("schema_version") != 1
-            or latest.get("kind") != "absorb-daily-dashboard"
+            latest.get("schema_version") != 2
+            or latest.get("kind") != "absorb-observation-dashboard"
+            or latest.get("product_mode") != "observation"
             or latest.get("market") != "TW"
             or re.fullmatch(r"objects/[0-9a-f]{64}\.json", path) is None
             or re.fullmatch(r"[0-9a-f]{64}", digest) is None
@@ -48,17 +54,14 @@ def load_dashboard_snapshot(today=None, *, load_object, cache=DASHBOARD_CACHE):
         document = json.loads(content.decode("utf-8"))
         if (
             not isinstance(document, dict)
-            or document.get("schema_version") != 1
-            or document.get("kind") != "absorb-daily-dashboard"
-            or document.get("market") != "TW"
-            or document.get("inference_as_of") != latest["inference_as_of"]
-            or not isinstance(document.get("sector_snapshot"), dict)
-            or not isinstance(document["sector_snapshot"].get("sectors"), dict)
-            or not isinstance(document.get("heatmap"), list)
-            or not isinstance(document.get("daily_focus"), list)
-            or not isinstance(document.get("top_picks"), list)
+            or document.get("observation_as_of")
+            != latest["observation_as_of"]
+            or document.get("source_manifest") != latest.get("source_manifest")
+            or document.get("source_manifest_sha256")
+            != latest.get("source_manifest_sha256")
         ):
             return None
+        validate_observation_dashboard(document)
     except (KeyError, TypeError, UnicodeError, ValueError):
         return None
     cache["latest"] = (document, now)

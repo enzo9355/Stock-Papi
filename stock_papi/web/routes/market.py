@@ -13,11 +13,28 @@ def register_market_routes(
     find_industry_peers, get_stock_name, dashboard_snapshot,
 ):
     def dashboard_api():
+        snapshot = dashboard_snapshot()
+        if not isinstance(snapshot, dict):
+            return jsonify(
+                {
+                    "status": "observation_unavailable",
+                    "prediction_status": "AI 預測研究中",
+                    "message": "市場觀察資料暫時無法使用",
+                }
+            ), 503
+        if snapshot.get("product_mode") == "observation":
+            return jsonify(
+                {
+                    **snapshot,
+                    "prediction_status": "AI 預測研究中",
+                }
+            )
+
+        # Verified preview candidates retain their separate research rendering.
         market = analyze("TAIEX")
         if not market:
             return jsonify({"error": "market data unavailable"}), 503
         sector_cards = dashboard_sector_cards()
-        snapshot = dashboard_snapshot() or {}
         presentation = snapshot.get("presentation") or {}
         baseline_status = snapshot.get("baseline_status")
         preview_heatmap = snapshot.get("heatmap")

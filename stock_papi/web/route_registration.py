@@ -14,6 +14,10 @@ def register_routes(app, dependencies):
         app,
         load_report_index_v2=dependencies["load_report_index_v2"],
         load_dashboard_snapshot=dependencies["dashboard_snapshot"],
+        preview_enabled=(
+            dependencies["prediction_capability"].preview_candidate_prefix
+            is not None
+        ),
     )
     register_system_routes(app, search_stock=dependencies["search_stock"])
     register_report_routes(
