@@ -579,6 +579,48 @@ File Creation Time: 07082026||||||
         )
         self.assertFalse(payload["backtest_compatibility"]["strong_action_allowed"])
 
+    def test_taiwan_observation_snapshot_skips_prediction_and_removes_model_columns(self):
+        frame = pd.DataFrame(
+            {
+                "Close": [100.0, 101.0],
+                "MA20": [99.0, 99.5],
+                "AI_P": [88.0, 99.0],
+                "FUTURE_RET_5": [0.1, 0.2],
+                "T": [1.0, 1.0],
+            },
+            index=pd.to_datetime(["2026-07-15", "2026-07-16"]),
+        )
+        frame.index.name = "Date"
+        pipeline = SimpleNamespace(
+            get_data=lambda _symbol, _days: frame.copy(),
+            calc_all=lambda data: data,
+            run_latest_inference=lambda _data: self.fail(
+                "Observation source must not run latest inference"
+            ),
+            run_ai_engine=lambda _data: self.fail(
+                "Observation source must not run walk-forward backtest"
+            ),
+            get_stock_name=lambda symbol: symbol,
+            PREDICTION_HORIZON=5,
+        )
+
+        payload = build_stock_snapshot(
+            pipeline,
+            "TW",
+            "2330",
+            target_market_date=datetime.date(2026, 7, 16),
+            observation_only=True,
+        )
+
+        self.assertEqual(payload["model_version"], "observation-source-v1")
+        self.assertEqual(payload["backtest"], {})
+        self.assertNotIn("feature_schema_version", payload)
+        self.assertNotIn("recommendation_policy_version", payload)
+        for row in payload["daily"]:
+            self.assertNotIn("AI_P", row)
+            self.assertNotIn("FUTURE_RET_5", row)
+            self.assertNotIn("T", row)
+
     def test_us_snapshot_reuses_existing_pipeline(self):
         frame = pd.DataFrame(
             {"Close": [100.0], "AI_P": [63.0]},

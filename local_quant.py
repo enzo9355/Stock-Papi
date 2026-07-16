@@ -72,6 +72,8 @@ US_EXCHANGES = {"Nasdaq", "NYSE", "CBOE"}
 CRYPTO_SECURITY_TERMS = (
     "bitcoin", "ethereum", "crypto", "solana", "litecoin", "dogecoin",
 )
+OBSERVATION_SOURCE_VERSION = "observation-source-v1"
+OBSERVATION_MODEL_COLUMNS = ("AI_P", "FUTURE_RET_5", "T")
 MOPS_SOURCES = (
     ("TWSE", "https://openapi.twse.com.tw/v1/opendata/t187ap04_L"),
     ("TPEx", "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap04_O"),
@@ -1280,6 +1282,7 @@ def build_stock_snapshot(
     target_market_date=None,
     promoted_backtest=None,
     degraded_bootstrap=False,
+    observation_only=False,
 ):
     if target_market_date is not None and type(target_market_date) is not datetime.date:
         raise TypeError("target_market_date must be a date")
@@ -1295,51 +1298,68 @@ def build_stock_snapshot(
     if frame is None or frame.empty:
         raise ValueError("calculated history is unavailable")
     compatibility = None
-    from stock_papi.quant.model import FEATURE_SCHEMA_VERSION
-    from stock_papi.services.recommendation_engine import (
-        RECOMMENDATION_POLICY_VERSION,
-    )
-
-    if promoted_backtest is None and not degraded_bootstrap:
-        backtest = pipeline.run_ai_engine(frame)
-        if not isinstance(backtest, dict):
-            raise ValueError("backtest is unavailable")
-        model_version = f"lgbm-{int(getattr(pipeline, 'PREDICTION_HORIZON', 5))}d-v1"
+    if observation_only:
+        frame = frame.drop(
+            columns=list(OBSERVATION_MODEL_COLUMNS),
+            errors="ignore",
+        )
+        backtest = {}
+        model_version = OBSERVATION_SOURCE_VERSION
     else:
-        if promoted_backtest is not None and not isinstance(promoted_backtest, dict):
-            raise TypeError("promoted_backtest must be a dictionary")
-        infer = getattr(pipeline, "run_latest_inference", None)
-        if not callable(infer):
-            raise ValueError("latest inference is unavailable")
-        inference = infer(frame)
-        if not isinstance(inference, dict) or not isinstance(
-            inference.get("model_version"), str
-        ):
-            raise ValueError("latest inference is unavailable")
-        model_version = inference["model_version"]
-        if promoted_backtest is None:
-            compatibility = {
-                "compatible": False,
-                "confidence_cap": "low",
-                "strong_action_allowed": False,
-                "reason": "initial_backtest_bootstrap",
-                "mismatch_fields": ["validated_backtest_baseline"],
-            }
-            backtest = {}
-        else:
-            from stock_papi.batch.backtest_store import assess_backtest_compatibility
+        from stock_papi.quant.model import FEATURE_SCHEMA_VERSION
+        from stock_papi.services.recommendation_engine import (
+            RECOMMENDATION_POLICY_VERSION,
+        )
 
-            compatibility = assess_backtest_compatibility(
-                promoted_backtest,
-                expected_model_version=model_version,
-                expected_feature_schema_version=FEATURE_SCHEMA_VERSION,
-                expected_recommendation_policy_version=RECOMMENDATION_POLICY_VERSION,
+        if promoted_backtest is None and not degraded_bootstrap:
+            backtest = pipeline.run_ai_engine(frame)
+            if not isinstance(backtest, dict):
+                raise ValueError("backtest is unavailable")
+            model_version = (
+                f"lgbm-{int(getattr(pipeline, 'PREDICTION_HORIZON', 5))}d-v1"
             )
-            if not compatibility["compatible"]:
-                raise ValueError(
-                    f"backtest baseline is incompatible: {compatibility['reason']}"
+        else:
+            if promoted_backtest is not None and not isinstance(
+                promoted_backtest, dict
+            ):
+                raise TypeError("promoted_backtest must be a dictionary")
+            infer = getattr(pipeline, "run_latest_inference", None)
+            if not callable(infer):
+                raise ValueError("latest inference is unavailable")
+            inference = infer(frame)
+            if not isinstance(inference, dict) or not isinstance(
+                inference.get("model_version"), str
+            ):
+                raise ValueError("latest inference is unavailable")
+            model_version = inference["model_version"]
+            if promoted_backtest is None:
+                compatibility = {
+                    "compatible": False,
+                    "confidence_cap": "low",
+                    "strong_action_allowed": False,
+                    "reason": "initial_backtest_bootstrap",
+                    "mismatch_fields": ["validated_backtest_baseline"],
+                }
+                backtest = {}
+            else:
+                from stock_papi.batch.backtest_store import (
+                    assess_backtest_compatibility,
                 )
-            backtest = promoted_backtest
+
+                compatibility = assess_backtest_compatibility(
+                    promoted_backtest,
+                    expected_model_version=model_version,
+                    expected_feature_schema_version=FEATURE_SCHEMA_VERSION,
+                    expected_recommendation_policy_version=(
+                        RECOMMENDATION_POLICY_VERSION
+                    ),
+                )
+                if not compatibility["compatible"]:
+                    raise ValueError(
+                        "backtest baseline is incompatible: "
+                        f"{compatibility['reason']}"
+                    )
+                backtest = promoted_backtest
 
     daily = json.loads(
         frame.reset_index().to_json(
@@ -1359,12 +1379,15 @@ def build_stock_snapshot(
         "name": pipeline.get_stock_name(symbol),
         "rows": len(daily),
         "model_version": model_version,
-        "feature_schema_version": FEATURE_SCHEMA_VERSION,
-        "recommendation_policy_version": RECOMMENDATION_POLICY_VERSION,
         "latest": latest,
         "backtest": backtest,
         "daily": daily,
     }
+    if not observation_only:
+        result["feature_schema_version"] = FEATURE_SCHEMA_VERSION
+        result["recommendation_policy_version"] = (
+            RECOMMENDATION_POLICY_VERSION
+        )
     if compatibility is not None:
         result["backtest_compatibility"] = compatibility
         result["backtest_as_of"] = compatibility.get("backtest_as_of")
@@ -1399,6 +1422,7 @@ def main(argv=None, now=None, free_bytes=None):
     parser.add_argument("--min-free-gb", type=float, default=100.0)
     parser.add_argument("--target-market-date", type=datetime.date.fromisoformat)
     parser.add_argument("--allow-degraded-bootstrap", action="store_true")
+    parser.add_argument("--observation-only", action="store_true")
     args = parser.parse_args(argv)
 
     try:
@@ -1413,7 +1437,13 @@ def main(argv=None, now=None, free_bytes=None):
         if args.post_close:
             if args.market != "TW" or args.target_market_date is None:
                 raise ValueError("--post-close requires TW and --target-market-date")
+            if args.observation_only and args.allow_degraded_bootstrap:
+                raise ValueError(
+                    "--observation-only cannot use degraded bootstrap"
+                )
             phase = "run"
+        elif args.observation_only:
+            raise ValueError("--observation-only requires --post-close")
         if args.run and args.market == "US" and not market_run_allowed(
             "US", checked_at
         ):
@@ -1456,57 +1486,83 @@ def main(argv=None, now=None, free_bytes=None):
             promoted_backtest = None
             daily_lock = contextlib.nullcontext()
             if args.post_close:
-                from stock_papi.batch.backtest_store import (
-                    BacktestStore,
-                    assess_backtest_compatibility,
-                )
                 from stock_papi.batch.runtime import acquire_job_lock
-                from stock_papi.quant.model import (
-                    FEATURE_SCHEMA_VERSION,
-                    MODEL_VERSION,
-                )
-                from stock_papi.services.recommendation_engine import (
-                    RECOMMENDATION_POLICY_VERSION,
-                )
-
-                promoted_backtest = BacktestStore(root, "TW").load_latest()
-                compatibility = (
-                    assess_backtest_compatibility(
-                        promoted_backtest,
-                        expected_model_version=MODEL_VERSION,
-                        expected_feature_schema_version=FEATURE_SCHEMA_VERSION,
-                        expected_recommendation_policy_version=RECOMMENDATION_POLICY_VERSION,
+                if args.observation_only:
+                    status["product_mode"] = "observation"
+                    batch_identity = {
+                        "target_market_date": (
+                            args.target_market_date.isoformat()
+                        ),
+                        "product_mode": "observation",
+                        "source_version": OBSERVATION_SOURCE_VERSION,
+                    }
+                    daily_lock = acquire_job_lock(
+                        root,
+                        "daily_observation",
+                        args.target_market_date,
+                        now=checked_at,
                     )
-                    if promoted_backtest is not None
-                    else None
-                )
-                if compatibility is None or not compatibility["compatible"]:
-                    if not args.allow_degraded_bootstrap:
-                        reason = (
-                            compatibility["reason"]
-                            if compatibility is not None
-                            else "validated_backtest_baseline_unavailable"
-                        )
-                        raise ValueError(f"daily baseline is unavailable: {reason}")
-                    promoted_backtest = None
-                    status["baseline_status"] = "initial_backtest_bootstrap"
                 else:
-                    status["baseline_status"] = "validated_compatible"
-                batch_identity = {
-                    "target_market_date": args.target_market_date.isoformat(),
-                    "model_version": MODEL_VERSION,
-                    "backtest_candidate_sha256": (
-                        promoted_backtest["candidate_sha256"]
+                    from stock_papi.batch.backtest_store import (
+                        BacktestStore,
+                        assess_backtest_compatibility,
+                    )
+                    from stock_papi.quant.model import (
+                        FEATURE_SCHEMA_VERSION,
+                        MODEL_VERSION,
+                    )
+                    from stock_papi.services.recommendation_engine import (
+                        RECOMMENDATION_POLICY_VERSION,
+                    )
+
+                    promoted_backtest = BacktestStore(root, "TW").load_latest()
+                    compatibility = (
+                        assess_backtest_compatibility(
+                            promoted_backtest,
+                            expected_model_version=MODEL_VERSION,
+                            expected_feature_schema_version=(
+                                FEATURE_SCHEMA_VERSION
+                            ),
+                            expected_recommendation_policy_version=(
+                                RECOMMENDATION_POLICY_VERSION
+                            ),
+                        )
                         if promoted_backtest is not None
-                        else "initial_backtest_bootstrap"
-                    ),
-                }
-                daily_lock = acquire_job_lock(
-                    root,
-                    "daily_prediction",
-                    args.target_market_date,
-                    now=checked_at,
-                )
+                        else None
+                    )
+                    if compatibility is None or not compatibility["compatible"]:
+                        if not args.allow_degraded_bootstrap:
+                            reason = (
+                                compatibility["reason"]
+                                if compatibility is not None
+                                else "validated_backtest_baseline_unavailable"
+                            )
+                            raise ValueError(
+                                f"daily baseline is unavailable: {reason}"
+                            )
+                        promoted_backtest = None
+                        status["baseline_status"] = (
+                            "initial_backtest_bootstrap"
+                        )
+                    else:
+                        status["baseline_status"] = "validated_compatible"
+                    batch_identity = {
+                        "target_market_date": (
+                            args.target_market_date.isoformat()
+                        ),
+                        "model_version": MODEL_VERSION,
+                        "backtest_candidate_sha256": (
+                            promoted_backtest["candidate_sha256"]
+                            if promoted_backtest is not None
+                            else "initial_backtest_bootstrap"
+                        ),
+                    }
+                    daily_lock = acquire_job_lock(
+                        root,
+                        "daily_prediction",
+                        args.target_market_date,
+                        now=checked_at,
+                    )
             with daily_lock, acquire_lock(root, now=checked_at):
                 status["cleanup"] = cleanup_expired_data(root, now=checked_at)
                 _write_json_atomic(status_path, status)
@@ -1541,7 +1597,9 @@ def main(argv=None, now=None, free_bytes=None):
                             promoted_backtest=promoted_backtest,
                             degraded_bootstrap=(
                                 args.post_close and promoted_backtest is None
+                                and not args.observation_only
                             ),
+                            observation_only=args.observation_only,
                         ),
                         limit=args.limit,
                         now_fn=now_fn,

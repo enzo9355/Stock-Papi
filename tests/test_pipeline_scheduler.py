@@ -44,6 +44,7 @@ class PipelineSchedulerTests(unittest.TestCase):
         self.assertIn("stock_papi.batch.observation_products_cli", post_close)
         self.assertIn("[switch]$PublishObservation", post_close)
         self.assertIn("if (-not $PublishObservation) { exit 0 }", post_close)
+        self.assertIn("'--observation-only'", post_close)
         self.assertNotIn("AllowDegradedBootstrap", post_close)
         self.assertIn("-RequireDashboard", post_close)
         pre_market = (scripts / "run_tw_pre_market_pipeline.ps1").read_text(

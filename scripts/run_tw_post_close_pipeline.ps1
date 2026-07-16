@@ -19,7 +19,16 @@ $CalendarPath = if ($env:TWSE_CALENDAR_ARTIFACT) { $env:TWSE_CALENDAR_ARTIFACT }
 $CalendarExitCode = $LASTEXITCODE
 if ($CalendarExitCode -eq 3) { Write-Output "$TargetDate is not a TW trading session; skipped"; exit 0 }
 if ($CalendarExitCode -ne 0) { exit $CalendarExitCode }
-$QuantArguments = @((Join-Path $RepoRoot 'local_quant.py'), '--root', $DataRoot, '--post-close', '--market', 'TW', '--target-market-date', $TargetDate, '--limit', '5000', '--delay', '0.5')
+$QuantArguments = @(
+    (Join-Path $RepoRoot 'local_quant.py'),
+    '--root', $DataRoot,
+    '--post-close',
+    '--observation-only',
+    '--market', 'TW',
+    '--target-market-date', $TargetDate,
+    '--limit', '5000',
+    '--delay', '0.5'
+)
 & $PythonExe @QuantArguments
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $Latest = Get-Content -LiteralPath (Join-Path $DataRoot 'publish\quant\v1\latest-TW.json') -Raw -Encoding utf8 | ConvertFrom-Json
