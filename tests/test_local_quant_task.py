@@ -133,6 +133,20 @@ class LocalQuantTaskTests(unittest.TestCase):
             source,
         )
 
+    def test_observation_uploader_auto_captures_rollback_receipt(self):
+        source = UPLOADER.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "if ($ObservationOnly -and -not $LkgReceiptPath)",
+            source,
+        )
+        self.assertIn("capture_observation_lkg.ps1", source)
+        self.assertIn("lkg_receipt = $LkgReceiptPath", source)
+        self.assertLess(
+            source.index("capture_observation_lkg.ps1"),
+            source.index("# Upload objects"),
+        )
+
     def test_lifecycle_deletes_cloud_objects_after_thirty_days(self):
         source = LIFECYCLE.read_text(encoding="utf-8")
 

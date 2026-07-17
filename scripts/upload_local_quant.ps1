@@ -374,6 +374,35 @@ function Publish-DashboardV1 {
     return $true
 }
 
+if ($ObservationOnly -and -not $LkgReceiptPath) {
+    $CaptureText = (& (Join-Path $PSScriptRoot 'capture_observation_lkg.ps1') `
+        -DataRoot $DataRoot `
+        -Bucket $Bucket | Out-String).Trim()
+    try {
+        $Capture = $CaptureText | ConvertFrom-Json
+    } catch {
+        throw 'Observation LKG capture output is invalid'
+    }
+    $LkgReceiptPath = [string]$Capture.receipt
+}
+if ($LkgReceiptPath) {
+    $ReceiptRoot = Join-Path $DataRoot 'release\observation-lkg'
+    $LkgReceiptPath = Assert-PathWithinRoot `
+        -Path $LkgReceiptPath `
+        -Root $ReceiptRoot
+    $ReceiptPreflight = Get-Content `
+        -LiteralPath $LkgReceiptPath `
+        -Raw `
+        -Encoding utf8 | ConvertFrom-Json
+    if (
+        $ReceiptPreflight.schema_version -ne 1 -or
+        $ReceiptPreflight.kind -ne 'absorb-observation-lkg' -or
+        $ReceiptPreflight.bucket -ne $Bucket -or
+        -not ($ReceiptPreflight.pointers -is [array])
+    ) {
+        throw 'Observation LKG receipt preflight is invalid'
+    }
+}
 
 try {
     $InsightsUploaded = $false
@@ -589,6 +618,7 @@ try {
         dashboard_uploaded = $DashboardUploaded
         dashboard_error = $DashboardUploadError
         pointer_updates = $Global:PointerUpdates.ToArray()
+        lkg_receipt = $LkgReceiptPath
         bucket = $Bucket
     } | ConvertTo-Json -Compress
     Set-Content -LiteralPath (Join-Path $DataRoot 'logs\upload-status.json') -Value $Status -Encoding utf8
