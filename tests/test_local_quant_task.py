@@ -121,6 +121,18 @@ class LocalQuantTaskTests(unittest.TestCase):
             source,
         )
 
+    def test_uploader_serializes_generic_pointer_updates_via_to_array(self):
+        source = UPLOADER.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "pointer_updates = $Global:PointerUpdates.ToArray()",
+            source,
+        )
+        self.assertNotIn(
+            "pointer_updates = @($Global:PointerUpdates)",
+            source,
+        )
+
     def test_lifecycle_deletes_cloud_objects_after_thirty_days(self):
         source = LIFECYCLE.read_text(encoding="utf-8")
 

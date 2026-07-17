@@ -588,7 +588,7 @@ try {
         report_v2_error = $ReportV2UploadError
         dashboard_uploaded = $DashboardUploaded
         dashboard_error = $DashboardUploadError
-        pointer_updates = @($Global:PointerUpdates)
+        pointer_updates = $Global:PointerUpdates.ToArray()
         bucket = $Bucket
     } | ConvertTo-Json -Compress
     Set-Content -LiteralPath (Join-Path $DataRoot 'logs\upload-status.json') -Value $Status -Encoding utf8
