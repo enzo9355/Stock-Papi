@@ -1,12 +1,15 @@
-"""公開 HTML 日報與舊 PDF 路由相容轉址。"""
+"""Public HTML report routes and legacy compatibility redirects."""
 
 import datetime
 import re
+import uuid
 
 from flask import abort, make_response, redirect, render_template, url_for
 
 from reporting.exceptions import ReportWebError
 from reporting.web import find_report
+from stock_papi.services.report_view import build_observation_report_view
+from werkzeug.exceptions import HTTPException
 
 
 def _valid_report_date(report_date):
@@ -26,34 +29,86 @@ def register_report_routes(
         and prediction_capability.mode == "research"
     )
 
-    def _v2_reports():
-        try:
-            reports = load_index_v2()
-        except ReportWebError:
-            return None
-        if observation_mode and isinstance(reports, list):
+    def _secure_response(response, *, cache="public, max-age=300"):
+        response.headers["Cache-Control"] = cache
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
+    def _report_error(status, *, report_type=None, report_date=None, exc=None):
+        correlation_id = uuid.uuid4().hex[:16]
+        if exc is not None:
+            app.logger.exception(
+                "report_render_failed correlation_id=%s report_type=%s report_date=%s error_type=%s",
+                correlation_id,
+                report_type,
+                report_date,
+                type(exc).__name__,
+            )
+        response = make_response(
+            render_template(
+                "report_unavailable.html",
+                status=status,
+                correlation_id=correlation_id,
+            ),
+            status,
+        )
+        response.headers["X-Correlation-ID"] = correlation_id
+        if status == 503:
+            response.headers["Retry-After"] = "60"
+        return _secure_response(response, cache="no-store")
+
+    def _v2_reports(*, required=False):
+        reports = load_index_v2()
+        if reports is None:
+            if required:
+                raise ReportWebError("報告索引暫時無法使用")
+            return []
+        if observation_mode:
             return [
                 item for item in reports
                 if item.get("product_mode") == "observation"
             ]
         return reports
 
-    def _v2_page(items, heading):
-        bundles = []
-        for item in items:
-            try:
-                metadata = load_metadata_v2(item)
-            except ReportWebError:
-                return "報告內容暫時無法使用", 503
+    def _daily_items(trading_date):
+        reports = _v2_reports(required=True)
+        return [
+            item
+            for item in reports
+            if item.get("applicable_trading_date") == trading_date
+            and item.get("report_type") in {"post_close", "pre_market"}
+        ]
+
+    def _observation_page(trading_date, report_type):
+        try:
+            item = next(
+                (value for value in _daily_items(trading_date)
+                 if value.get("report_type") == report_type),
+                None,
+            )
+            if item is None:
+                abort(404)
+            metadata = load_metadata_v2(item)
             if metadata is None:
-                return "報告內容暫時無法使用", 503
-            bundles.append({"item": item, "metadata": metadata})
-        response = make_response(
-            render_template("report_trading_day.html", heading=heading, bundles=bundles)
-        )
-        response.headers["Cache-Control"] = "public, max-age=300"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        return response
+                raise ReportWebError("報告內容暫時無法使用")
+            report = build_observation_report_view(metadata)
+            response = make_response(
+                render_template("report_observation.html", report=report)
+            )
+            return _secure_response(response)
+        except ReportWebError:
+            return _report_error(
+                503, report_type=report_type, report_date=trading_date
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            return _report_error(
+                500,
+                report_type=report_type,
+                report_date=trading_date,
+                exc=exc,
+            )
 
     def reports_page():
         if observation_mode:
@@ -63,14 +118,15 @@ def register_report_routes(
                 reports = load_index()
             except ReportWebError:
                 reports = None
-        reports_v2 = _v2_reports()
+        try:
+            reports_v2 = _v2_reports()
+        except ReportWebError:
+            reports_v2 = None
         response = make_response(render_template(
             "reports.html", reports=reports or [], reports_v2=reports_v2 or [],
             unavailable=reports is None and reports_v2 is None
         ))
-        response.headers["Cache-Control"] = "public, max-age=300"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        return response
+        return _secure_response(response)
 
     def report_page(report_date):
         if observation_mode:
@@ -98,9 +154,7 @@ def register_report_routes(
             metadata=metadata,
             public_report=metadata.get("public_report"),
         ))
-        response.headers["Cache-Control"] = "public, max-age=300"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        return response
+        return _secure_response(response)
 
     def legacy_report_redirect(report_date):
         if not _valid_report_date(report_date):
@@ -113,51 +167,39 @@ def register_report_routes(
     def trading_day_report_page(trading_date):
         if not _valid_report_date(trading_date):
             abort(404)
-        reports = _v2_reports()
-        if reports is None:
-            return "報告服務暫時無法使用", 503
-        items = [
-            item
-            for item in reports
-            if item.get("applicable_trading_date") == trading_date
-            and item.get("report_type") in {"post_close", "pre_market"}
-        ]
-        if not items:
+        try:
+            items = _daily_items(trading_date)
+            if not items:
+                abort(404)
+            response = make_response(render_template(
+                "report_day_index.html",
+                trading_date=trading_date,
+                reports=items,
+            ))
+            return _secure_response(response)
+        except ReportWebError:
+            return _report_error(503, report_date=trading_date)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            return _report_error(500, report_date=trading_date, exc=exc)
+
+    def post_close_report_page(trading_date):
+        if not _valid_report_date(trading_date):
             abort(404)
-        return _v2_page(items, f"{trading_date} 今日市場準備")
+        return _observation_page(trading_date, "post_close")
 
     def pre_market_report_page(trading_date):
         if not _valid_report_date(trading_date):
             abort(404)
-        reports = _v2_reports()
-        if reports is None:
-            return "報告服務暫時無法使用", 503
-        items = [
-            item
-            for item in reports
-            if item.get("applicable_trading_date") == trading_date
-            and item.get("report_type") == "pre_market"
-        ]
-        if not items:
-            abort(404)
-        return _v2_page(items[:1], f"{trading_date} 盤前風險更新")
+        return _observation_page(trading_date, "pre_market")
 
     def weekly_report_page(week_id):
         if observation_mode:
             abort(404)
         if not isinstance(week_id, str) or re.fullmatch(r"[0-9]{4}-W[0-9]{2}", week_id) is None:
             abort(404)
-        reports = _v2_reports()
-        if reports is None:
-            return "報告服務暫時無法使用", 503
-        items = [
-            item
-            for item in reports
-            if item.get("report_type") == "weekly_model" and item.get("week_id") == week_id
-        ]
-        if not items:
-            abort(404)
-        return _v2_page(items[:1], f"{week_id} 模型驗證週報")
+        return _report_error(503)
 
     app.add_url_rule("/reports", "reports_page", reports_page)
     app.add_url_rule("/reports/<report_date>", "report_page", report_page)
@@ -174,6 +216,11 @@ def register_report_routes(
         "/reports/trading-day/<trading_date>",
         "trading_day_report_page",
         trading_day_report_page,
+    )
+    app.add_url_rule(
+        "/reports/<trading_date>/post-close",
+        "post_close_report_page",
+        post_close_report_page,
     )
     app.add_url_rule(
         "/reports/<trading_date>/pre-market",

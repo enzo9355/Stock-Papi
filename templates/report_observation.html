@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}{{ report.title }}｜ABSORB{% endblock %}
+{% block nav_reports %}active{% endblock %}
+{% block content %}
+<article class="page report-detail-page">
+  <header class="report-hero panel">
+    <a class="back-link" href="{{ url_for('trading_day_report_page', trading_date=report.applicable_trading_date) }}">返回當日報告</a>
+    <p class="eyebrow">{{ report.label }}</p>
+    <h1>{{ report.title }}</h1>
+    <p class="muted">資料日 {{ report.source_market_date }}｜適用交易日 {{ report.applicable_trading_date }}｜發布 {{ report.published_at }}</p>
+    <p class="muted small">AI 預測研究中；本頁只呈現已發生且通過發布驗證的市場資料。</p>
+  </header>
+
+  {% if report.overnight_overlay %}
+    <section class="panel" aria-labelledby="overnight-title">
+      <p class="eyebrow">OVERNIGHT UPDATE</p>
+      <h2 id="overnight-title">盤前風險更新</h2>
+      <p>{{ report.overnight_overlay.message }}</p>
+      <p class="muted small">更新時間 {{ report.overnight_overlay.as_of }}</p>
+    </section>
+  {% endif %}
+
+  {% set content = report.core %}
+  {% set market = content.market_observation %}
+  <section class="panel" aria-labelledby="market-actuals-title">
+    <h2 id="market-actuals-title">市場實況</h2>
+    <dl class="report-meta">
+      <div><dt>單日中位報酬</dt><dd>{{ '%+.2f%%'|format(market.return_1d_pct) if market.return_1d_pct is not none else '資料不足' }}</dd></div>
+      <div><dt>上漲／下跌家數</dt><dd>{{ market.advancing_count }}／{{ market.declining_count }}</dd></div>
+      <div><dt>站上 MA20</dt><dd>{{ '%.1f%%'|format(market.ma20_breadth_pct) if market.ma20_breadth_pct is not none else '資料不足' }}</dd></div>
+      <div><dt>20 日已實現波動</dt><dd>{{ '%.1f%%'|format(market.realized_volatility_20d_pct) if market.realized_volatility_20d_pct is not none else '資料不足' }}</dd></div>
+    </dl>
+  </section>
+
+  <section class="panel" aria-labelledby="industry-report-title">
+    <h2 id="industry-report-title">產業觀察</h2>
+    <div class="industry-detail-list">
+      {% for industry in content.industry_observations[:12] %}
+        <article class="industry-detail"><header><div><h3>{{ industry.name }}</h3><p>{{ industry.available_count }}／{{ industry.component_count }} 檔可用</p></div><strong class="return {{ 'up' if industry.relative_return_5d_pct is not none and industry.relative_return_5d_pct >= 0 else 'down' }}">{{ '%+.2f%%'|format(industry.relative_return_5d_pct) if industry.relative_return_5d_pct is not none else '資料不足' }}</strong></header></article>
+      {% else %}<div class="empty-state">產業觀察資料不足。</div>{% endfor %}
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="event-report-title">
+    <h2 id="event-report-title">個股異常事件</h2>
+    <div class="mops-list">{% for item in content.stock_events[:30] %}<a href="{{ url_for('stock_page', code=item.symbol) }}"><strong>{{ item.name }}（{{ item.symbol }}）</strong><span>{{ item.observation }}</span><small>{{ item.as_of }}｜{{ item.metric_value }} {{ item.unit }}</small></a>{% else %}<div class="empty-state">目前沒有通過條件的異常事件。</div>{% endfor %}</div>
+  </section>
+
+  <section class="panel" aria-labelledby="etf-report-title">
+    <h2 id="etf-report-title">ETF 觀察</h2>
+    <div class="etf-grid">{% for item in content.etf_observations[:30] %}<article class="etf-card"><h3>{{ item.name }}（{{ item.symbol }}）</h3><p>收盤 {{ '{:,.2f}'.format(item.price) if item.price is not none else '—' }}｜單日 {{ '%+.2f%%'|format(item.return_1d_pct) if item.return_1d_pct is not none else '—' }}｜5 日 {{ '%+.2f%%'|format(item.return_5d_pct) if item.return_5d_pct is not none else '—' }}</p></article>{% else %}<div class="empty-state">ETF 觀察資料不足。</div>{% endfor %}</div>
+  </section>
+
+  {% set quality = content.data_quality %}
+  <section class="panel" aria-labelledby="quality-report-title">
+    <h2 id="quality-report-title">資料品質</h2>
+    <dl class="report-meta"><div><dt>覆蓋率</dt><dd>{{ '%.2f%%'|format(quality.coverage * 100) if quality.coverage is not none else '資料不足' }}</dd></div><div><dt>有效標的</dt><dd>{{ quality.symbol_count if quality.symbol_count is not none else '資料不足' }}</dd></div><div><dt>未納入標的</dt><dd>{{ quality.failure_count if quality.failure_count is not none else '資料不足' }}</dd></div></dl>
+    {% if report.warnings %}<ul>{% for warning in report.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>{% endif %}
+  </section>
+
+  <section class="panel risk-panel"><h2>方法限制</h2><p>本頁只整理已發生的市場資料。資料可能因交易所揭露時差、來源缺漏或市場休市而延遲；任何事件條件都不是買賣指令。</p></section>
+</article>
+{% endblock %}

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}報告暫時無法使用｜ABSORB{% endblock %}
+{% block nav_reports %}active{% endblock %}
+{% block content %}
+<article class="page report-detail-page">
+  <section class="panel empty-state" role="alert">
+    <p class="eyebrow">REPORT STATUS</p>
+    <h1>{% if status == 503 %}報告暫時無法使用{% else %}報告頁面發生錯誤{% endif %}</h1>
+    <p>請稍後再試，或返回每日報告。</p>
+    <p class="muted small">追蹤代碼：{{ correlation_id }}</p>
+    <a class="button" href="{{ url_for('reports_page') }}">返回每日報告</a>
+  </section>
+</article>
+{% endblock %}

@@ -1,0 +1,52 @@
+{
+  "post_close_content": {
+    "dashboard_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "market_observation": {
+      "return_1d_pct": 0.42,
+      "advancing_count": 612,
+      "declining_count": 387,
+      "ma20_breadth_pct": 54.3,
+      "realized_volatility_20d_pct": 18.2
+    },
+    "industry_observations": [],
+    "heatmap": [],
+    "stock_events": [],
+    "etf_observations": [],
+    "daily_focus": ["市場廣度維持中性"],
+    "data_quality": {
+      "coverage": 0.9971,
+      "symbol_count": 1042,
+      "failure_count": 3
+    }
+  },
+  "pre_market_content": {
+    "core": {
+      "dashboard_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "market_observation": {
+        "return_1d_pct": 0.42,
+        "advancing_count": 612,
+        "declining_count": 387,
+        "ma20_breadth_pct": 54.3,
+        "realized_volatility_20d_pct": 18.2
+      },
+      "industry_observations": [],
+      "heatmap": [],
+      "stock_events": [],
+      "etf_observations": [],
+      "daily_focus": ["市場廣度維持中性"],
+      "data_quality": {
+        "coverage": 0.9971,
+        "symbol_count": 1042,
+        "failure_count": 3
+      }
+    },
+    "base_metadata_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "overnight_overlay": {
+      "status": "mixed",
+      "message": "隔夜訊號分歧",
+      "available": ["SPY", "QQQ"],
+      "unavailable": [],
+      "as_of": "2026-07-17T00:30:00Z"
+    }
+  }
+}

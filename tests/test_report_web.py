@@ -1,4 +1,6 @@
 import datetime
+import copy
+import json
 import os
 import tempfile
 import unittest
@@ -38,6 +40,65 @@ class ReportWebTests(unittest.TestCase):
         }
         return temporary, objects, metadata
 
+    def _production_shaped_objects(self):
+        """以脫敏的 Production schema 形狀建立完整 v2 artifacts。"""
+        fixture_path = (
+            Path(__file__).parent
+            / "fixtures"
+            / "production_observation_report_shapes.json"
+        )
+        shapes = json.loads(fixture_path.read_text(encoding="utf-8"))
+        temporary = tempfile.TemporaryDirectory()
+        root = Path(temporary.name)
+        post_close = build_post_close_observation_metadata(
+            observation_dashboard(), Calendar()
+        )
+        post_close["content"] = shapes["post_close_content"]
+        post_close["summary"] = ["市場廣度維持中性"]
+        publish_report_v2(root, post_close)
+
+        pre_market = copy.deepcopy(post_close)
+        pre_market.update(
+            report_type="pre_market",
+            published_at="2026-07-16T23:30:00Z",
+            title="2026-07-16 盤前風險更新",
+            summary=["隔夜訊號分歧"],
+            warnings=[],
+            content=shapes["pre_market_content"],
+        )
+        publish_report_v2(root, pre_market)
+        publish = root / "publish" / "reports" / "v2"
+        objects = {
+            f"reports/v2/{path.relative_to(publish).as_posix()}": path.read_bytes()
+            for path in publish.rglob("*")
+            if path.is_file()
+        }
+        return temporary, objects
+
+    def test_production_shaped_daily_reports_have_distinct_canonical_pages(self):
+        temporary, objects = self._production_shaped_objects()
+        self.addCleanup(temporary.cleanup)
+
+        with patch.object(
+            stock_app,
+            "_gcs_get_report_v2_object",
+            side_effect=lambda path, _size: objects.get(path),
+            create=True,
+        ):
+            client = stock_app.app.test_client()
+            post_close = client.get("/reports/2026-07-16/post-close")
+            pre_market = client.get("/reports/2026-07-16/pre-market")
+            legacy_index = client.get("/reports/trading-day/2026-07-16")
+
+        self.assertEqual(post_close.status_code, 200)
+        self.assertIn("盤後市場觀察", post_close.get_data(as_text=True))
+        self.assertEqual(pre_market.status_code, 200)
+        self.assertIn("隔夜訊號分歧", pre_market.get_data(as_text=True))
+        self.assertEqual(legacy_index.status_code, 200)
+        index_html = legacy_index.get_data(as_text=True)
+        self.assertIn("/reports/2026-07-16/post-close", index_html)
+        self.assertIn("/reports/2026-07-16/pre-market", index_html)
+
     def test_v2_observation_report_is_the_only_formal_report_surface(self):
         temporary, objects, metadata = self._objects()
         self.addCleanup(temporary.cleanup)
@@ -50,7 +111,7 @@ class ReportWebTests(unittest.TestCase):
         ):
             client = stock_app.app.test_client()
             listing = client.get("/reports")
-            trading_day = client.get("/reports/trading-day/2026-07-16")
+            trading_day = client.get("/reports/2026-07-16/post-close")
             pre_market = client.get("/reports/2026-07-16/pre-market")
             weekly = client.get("/reports/weekly/2026-W29")
 
@@ -58,12 +119,11 @@ class ReportWebTests(unittest.TestCase):
         listing_html = listing.get_data(as_text=True)
         self.assertIn(metadata["title"], listing_html)
         self.assertIn("盤後觀察", listing_html)
-        self.assertIn("閱讀觀察報告", listing_html)
+        self.assertIn("閱讀盤後觀察", listing_html)
 
         self.assertEqual(trading_day.status_code, 200)
         html = trading_day.get_data(as_text=True)
         for label in (
-            "今日市場準備",
             "市場實況",
             "產業觀察",
             "個股異常事件",
@@ -135,13 +195,15 @@ class ReportWebTests(unittest.TestCase):
             create=True,
         ):
             client = stock_app.app.test_client()
-            bad_hash = client.get("/reports/trading-day/2026-07-16")
+            bad_hash = client.get("/reports/2026-07-16/post-close")
             bad_date = client.get("/reports/trading-day/not-a-date")
             missing = client.get("/reports/trading-day/2026-07-17")
             traversal = client.get("/reports/../../secret")
 
         self.assertEqual(bad_hash.status_code, 503)
         self.assertNotIn("metadata/", bad_hash.get_data(as_text=True))
+        self.assertEqual(bad_hash.headers["Cache-Control"], "no-store")
+        self.assertEqual(len(bad_hash.headers["X-Correlation-ID"]), 16)
         self.assertEqual(bad_date.status_code, 404)
         self.assertEqual(missing.status_code, 404)
         self.assertEqual(traversal.status_code, 404)

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}{{ trading_date }} 每日報告｜ABSORB{% endblock %}
+{% block nav_reports %}active{% endblock %}
+{% block content %}
+<article class="page report-detail-page">
+  <header class="report-hero panel">
+    <a class="back-link" href="{{ url_for('reports_page') }}">返回每日報告</a>
+    <p class="eyebrow">VERIFIED REPORTS</p>
+    <h1>{{ trading_date }} 每日報告</h1>
+    <p class="muted small">盤後觀察與盤前更新使用各自的資料契約與頁面。</p>
+  </header>
+  <section class="panel report-list" aria-label="當日報告">
+    {% for report in reports %}
+      <article class="report-card">
+        <div>
+          <p class="eyebrow">{{ {'post_close': '盤後觀察', 'pre_market': '盤前風險更新'}[report.report_type] }}</p>
+          <h2>{{ report.title }}</h2>
+          <p>{{ report.summary|join('；') }}</p>
+        </div>
+        <div class="report-actions">
+          {% if report.report_type == 'post_close' %}
+            <a class="button" href="{{ url_for('post_close_report_page', trading_date=trading_date) }}">閱讀盤後觀察</a>
+          {% else %}
+            <a class="button" href="{{ url_for('pre_market_report_page', trading_date=trading_date) }}">閱讀盤前更新</a>
+          {% endif %}
+        </div>
+      </article>
+    {% endfor %}
+  </section>
+</article>
+{% endblock %}
