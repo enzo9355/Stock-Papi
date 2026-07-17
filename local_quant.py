@@ -547,6 +547,39 @@ def publish_market_snapshot(
         "market_as_of": market_as_of,
         "symbols": entries,
     }
+    latest_path = publish_root / f"latest-{market}.json"
+    try:
+        current_latest = json.loads(latest_path.read_text(encoding="utf-8"))
+        current_relative = str(current_latest.get("manifest") or "")
+        if (
+            current_latest.get("schema_version") == 2
+            and current_latest.get("market") == market
+            and re.fullmatch(
+                rf"manifests/{market}-[0-9]{{8}}T[0-9]{{6}}Z-[0-9a-f]{{12}}\.json",
+                current_relative,
+            )
+        ):
+            current_path = publish_root / current_relative
+            current_bytes = current_path.read_bytes()
+            current_digest = hashlib.sha256(current_bytes).hexdigest()
+            current_manifest = json.loads(current_bytes)
+            if (
+                secrets.compare_digest(
+                    current_digest,
+                    str(current_latest.get("manifest_sha256") or ""),
+                )
+                and current_latest.get("generated_at")
+                == current_manifest.get("generated_at")
+            ):
+                current_identity = dict(current_manifest)
+                candidate_identity = dict(manifest)
+                current_identity.pop("generated_at", None)
+                candidate_identity.pop("generated_at", None)
+                if current_identity == candidate_identity:
+                    return latest_path
+    except (AttributeError, OSError, TypeError, ValueError):
+        pass
+
     manifest_bytes = json.dumps(
         manifest, ensure_ascii=False, separators=(",", ":"), sort_keys=True
     ).encode("utf-8")
@@ -560,7 +593,6 @@ def publish_market_snapshot(
     else:
         _write_bytes_atomic(manifest_path, manifest_bytes)
 
-    latest_path = publish_root / f"latest-{market}.json"
     _write_json_atomic(
         latest_path,
         {

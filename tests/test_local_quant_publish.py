@@ -141,6 +141,77 @@ class LocalQuantPublishTests(unittest.TestCase):
                 with gzip.open(object_path, "rt", encoding="utf-8") as stream:
                     self.assertEqual(json.load(stream)["schema_version"], 1)
 
+    def test_identical_market_rerun_preserves_existing_manifest_and_latest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ensure_layout(root)
+            write_stock_artifact(
+                root,
+                "TW",
+                "2330",
+                {"as_of": "2026-07-03", "model_version": "observation-source-v1"},
+            )
+
+            latest_path = publish_market_snapshot(
+                root,
+                "TW",
+                ["2330"],
+                generated_at=datetime.datetime(2026, 7, 5, 6, tzinfo=TAIPEI),
+            )
+            original_latest = latest_path.read_bytes()
+            original_manifests = sorted((latest_path.parent / "manifests").iterdir())
+
+            rerun_path = publish_market_snapshot(
+                root,
+                "TW",
+                ["2330"],
+                generated_at=datetime.datetime(2026, 7, 5, 7, tzinfo=TAIPEI),
+            )
+
+            self.assertEqual(rerun_path, latest_path)
+            self.assertEqual(rerun_path.read_bytes(), original_latest)
+            self.assertEqual(
+                sorted((latest_path.parent / "manifests").iterdir()),
+                original_manifests,
+            )
+
+    def test_changed_market_rerun_publishes_new_manifest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ensure_layout(root)
+            write_stock_artifact(
+                root,
+                "TW",
+                "2330",
+                {"as_of": "2026-07-03", "close": 100},
+            )
+            latest_path = publish_market_snapshot(
+                root,
+                "TW",
+                ["2330"],
+                generated_at=datetime.datetime(2026, 7, 5, 6, tzinfo=TAIPEI),
+            )
+            original_latest = latest_path.read_bytes()
+
+            write_stock_artifact(
+                root,
+                "TW",
+                "2330",
+                {"as_of": "2026-07-03", "close": 101},
+            )
+            publish_market_snapshot(
+                root,
+                "TW",
+                ["2330"],
+                generated_at=datetime.datetime(2026, 7, 5, 7, tzinfo=TAIPEI),
+            )
+
+            self.assertNotEqual(latest_path.read_bytes(), original_latest)
+            self.assertEqual(
+                len(list((latest_path.parent / "manifests").iterdir())),
+                2,
+            )
+
     def test_missing_artifact_does_not_replace_previous_latest(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
