@@ -5,10 +5,19 @@ function Assert-PathWithinRoot {
         [hashtable]$VerifiedDirs
     )
 
-    $ResolvedRoot = (Resolve-Path -LiteralPath $Root).Path.TrimEnd(
+    # Use only .NET path APIs. PowerShell provider reads can be suppressed by
+    # an outer -WhatIf even though this guard is intentionally read-only.
+    $ResolvedRoot = [IO.Path]::GetFullPath($Root).TrimEnd(
         [IO.Path]::DirectorySeparatorChar
     )
-    $Resolved = (Resolve-Path -LiteralPath $Path).Path
+    $Resolved = [IO.Path]::GetFullPath($Path)
+    if (
+        -not [IO.Directory]::Exists($ResolvedRoot) -or
+        (-not [IO.File]::Exists($Resolved) -and
+            -not [IO.Directory]::Exists($Resolved))
+    ) {
+        throw 'Release path does not exist'
+    }
     $RootPrefix = $ResolvedRoot + [IO.Path]::DirectorySeparatorChar
     if (
         -not $Resolved.Equals(
@@ -23,31 +32,30 @@ function Assert-PathWithinRoot {
         throw 'Release path escaped allowlisted root'
     }
     if (
-        ((Get-Item -LiteralPath $ResolvedRoot).Attributes -band
+        ([IO.File]::GetAttributes($ResolvedRoot) -band
             [IO.FileAttributes]::ReparsePoint) -ne 0
     ) {
         throw 'Release root contains a reparse point'
     }
 
-    $ResolvedItem = Get-Item -LiteralPath $Resolved
     if (
-        ($ResolvedItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+        ([IO.File]::GetAttributes($Resolved) -band
+            [IO.FileAttributes]::ReparsePoint) -ne 0
     ) {
         throw 'Release path contains a reparse point'
     }
-    $Current = if ($ResolvedItem.PSIsContainer) {
-        $ResolvedItem
+    $CurrentPath = if ([IO.Directory]::Exists($Resolved)) {
+        $Resolved
     } else {
-        $ResolvedItem.Directory
+        [IO.Path]::GetDirectoryName($Resolved)
     }
     while (
-        $null -ne $Current -and
-        -not $Current.FullName.Equals(
+        $null -ne $CurrentPath -and
+        -not $CurrentPath.Equals(
             $ResolvedRoot,
             [StringComparison]::OrdinalIgnoreCase
         )
     ) {
-        $CurrentPath = [string]$Current.FullName
         if (
             $null -ne $VerifiedDirs -and
             $VerifiedDirs.ContainsKey($CurrentPath)
@@ -55,35 +63,37 @@ function Assert-PathWithinRoot {
             break
         }
         if (
-            ($Current.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+            ([IO.File]::GetAttributes($CurrentPath) -band
+                [IO.FileAttributes]::ReparsePoint) -ne 0
         ) {
             throw 'Release path contains a reparse point'
         }
-        $Current = $Current.Parent
+        $Parent = [IO.Directory]::GetParent($CurrentPath)
+        $CurrentPath = if ($null -eq $Parent) { $null } else { $Parent.FullName }
     }
-    if ($null -eq $Current) {
+    if ($null -eq $CurrentPath) {
         throw 'Release path escaped allowlisted root'
     }
 
     if ($null -ne $VerifiedDirs) {
-        $Current = if ($ResolvedItem.PSIsContainer) {
-            $ResolvedItem
+        $CurrentPath = if ([IO.Directory]::Exists($Resolved)) {
+            $Resolved
         } else {
-            $ResolvedItem.Directory
+            [IO.Path]::GetDirectoryName($Resolved)
         }
         while (
-            $null -ne $Current -and
-            -not $Current.FullName.Equals(
+            $null -ne $CurrentPath -and
+            -not $CurrentPath.Equals(
                 $ResolvedRoot,
                 [StringComparison]::OrdinalIgnoreCase
             )
         ) {
-            $CurrentPath = [string]$Current.FullName
             if ($VerifiedDirs.ContainsKey($CurrentPath)) { break }
             $VerifiedDirs[$CurrentPath] = $true
-            $Current = $Current.Parent
+            $Parent = [IO.Directory]::GetParent($CurrentPath)
+            $CurrentPath = if ($null -eq $Parent) { $null } else { $Parent.FullName }
         }
-        if ($null -eq $Current) {
+        if ($null -eq $CurrentPath) {
             throw 'Release path escaped allowlisted root'
         }
     }

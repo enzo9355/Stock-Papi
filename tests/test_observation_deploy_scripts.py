@@ -10,10 +10,25 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY = REPOSITORY_ROOT / "scripts" / "deploy_observation_production.ps1"
 VERIFY = REPOSITORY_ROOT / "scripts" / "verify_cutover.ps1"
 ROLLBACK = REPOSITORY_ROOT / "scripts" / "manual_rollback.ps1"
+COMMON = REPOSITORY_ROOT / "scripts" / "observation_release_common.ps1"
 CHECKLIST = REPOSITORY_ROOT / "docs" / "absorb-cutover-checklist.md"
 
 
 class ObservationDeployScriptTests(unittest.TestCase):
+    def test_path_allowlist_read_is_not_suppressed_by_whatif(self) -> None:
+        source = COMMON.read_text(encoding="utf-8")
+        path_guard = source[
+            source.index("function Assert-PathWithinRoot"):source.index(
+                "function Invoke-GcloudCaptured"
+            )
+        ]
+
+        self.assertIn("[IO.Path]::GetFullPath", path_guard)
+        self.assertIn("[IO.File]::GetAttributes", path_guard)
+        self.assertIn("[IO.Directory]::GetParent", path_guard)
+        self.assertNotIn("Resolve-Path", path_guard)
+        self.assertNotIn("Get-Item", path_guard)
+
     def test_deploy_is_no_traffic_first_and_explicitly_fail_closed(self) -> None:
         source = DEPLOY.read_text(encoding="utf-8")
 
@@ -54,6 +69,10 @@ class ObservationDeployScriptTests(unittest.TestCase):
         self.assertIn("$PreviousWhatIfPreference = $WhatIfPreference", invoke_gcloud)
         self.assertIn("$WhatIfPreference = $false", invoke_gcloud)
         self.assertIn("$WhatIfPreference = $PreviousWhatIfPreference", invoke_gcloud)
+        preflight = source[:source.index("if (-not $PSCmdlet.ShouldProcess(")]
+        self.assertIn("[IO.File]::ReadAllBytes", preflight)
+        self.assertNotIn("Get-Content", preflight)
+        self.assertNotIn("Get-FileHash", preflight)
 
     def test_traffic_preflight_sums_ordered_receipt_entries_explicitly(self) -> None:
         source = DEPLOY.read_text(encoding="utf-8")
@@ -124,6 +143,26 @@ class ObservationDeployScriptTests(unittest.TestCase):
 
         self.assertNotIn("run', 'deploy'", verify)
         self.assertNotIn("storage', 'rm'", verify)
+
+    def test_no_traffic_smoke_requests_both_canonical_report_types(self) -> None:
+        source = DEPLOY.read_text(encoding="utf-8")
+
+        for required in (
+            "CanonicalReportPaths",
+            "post-close",
+            "pre-market",
+            "Observation report link is unavailable",
+            "Observation report smoke failed",
+        ):
+            self.assertIn(required, source)
+
+    def test_deploy_failure_rolls_back_traffic_without_mutating_existing_pointers(self) -> None:
+        source = DEPLOY.read_text(encoding="utf-8")
+        failure_handler = source[source.index("} catch {"):]
+
+        self.assertIn("Restore-PreviousTraffic", failure_handler)
+        self.assertNotIn("rollback_observation.ps1", failure_handler)
+        self.assertNotIn("applied_generation", failure_handler)
 
     def test_manual_rollback_can_restore_cloud_run_and_observation_pointers(self) -> None:
         source = ROLLBACK.read_text(encoding="utf-8")

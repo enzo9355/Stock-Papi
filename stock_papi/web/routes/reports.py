@@ -96,9 +96,12 @@ def register_report_routes(
                 render_template("report_observation.html", report=report)
             )
             return _secure_response(response)
-        except ReportWebError:
+        except ReportWebError as exc:
             return _report_error(
-                503, report_type=report_type, report_date=trading_date
+                503,
+                report_type=report_type,
+                report_date=trading_date,
+                exc=exc,
             )
         except HTTPException:
             raise
@@ -177,8 +180,8 @@ def register_report_routes(
                 reports=items,
             ))
             return _secure_response(response)
-        except ReportWebError:
-            return _report_error(503, report_date=trading_date)
+        except ReportWebError as exc:
+            return _report_error(503, report_date=trading_date, exc=exc)
         except HTTPException:
             raise
         except Exception as exc:

@@ -19,16 +19,16 @@ if ($DataRoot -notin @('D:\AbsorbData', 'D:\StockPapiData')) {
 
 . (Join-Path $PSScriptRoot 'observation_release_common.ps1')
 
-$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$RepoRoot = [IO.Path]::GetFullPath([IO.Path]::Combine($PSScriptRoot, '..'))
 $LkgRoot = Join-Path $DataRoot 'release\observation-lkg'
 $ResolvedLkgReceipt = Assert-PathWithinRoot `
     -Path $ObservationLkgReceipt `
     -Root $LkgRoot
 $CaptureRoot = Split-Path -Parent $ResolvedLkgReceipt
-$ObservationLkg = Get-Content `
-    -LiteralPath $ResolvedLkgReceipt `
-    -Raw `
-    -Encoding utf8 | ConvertFrom-Json
+$ObservationLkgBytes = [IO.File]::ReadAllBytes($ResolvedLkgReceipt)
+$ObservationLkg = [Text.Encoding]::UTF8.GetString(
+    $ObservationLkgBytes
+) | ConvertFrom-Json
 if (
     $ObservationLkg.schema_version -ne 1 -or
     $ObservationLkg.kind -ne 'absorb-observation-lkg' -or
@@ -36,11 +36,18 @@ if (
 ) {
     throw 'Observation LKG receipt is invalid'
 }
-$ObservationLkgHash = (
-    Get-FileHash -LiteralPath $ResolvedLkgReceipt -Algorithm SHA256
-).Hash.ToLowerInvariant()
+$ObservationLkgHasher = [Security.Cryptography.SHA256]::Create()
+try {
+    $ObservationLkgHash = (
+        [BitConverter]::ToString(
+            $ObservationLkgHasher.ComputeHash($ObservationLkgBytes)
+        ) -replace '-', ''
+    ).ToLowerInvariant()
+} finally {
+    $ObservationLkgHasher.Dispose()
+}
 $DeploymentReceiptPath = Join-Path $CaptureRoot 'deployment-receipt.json'
-if (Test-Path -LiteralPath $DeploymentReceiptPath) {
+if ([IO.File]::Exists($DeploymentReceiptPath)) {
     throw 'Observation deployment receipt already exists'
 }
 
@@ -188,6 +195,7 @@ function Invoke-ObservationSmoke {
     param([string]$BaseUrl)
 
     $Results = New-Object System.Collections.Generic.List[object]
+    $ReportsHtml = $null
     foreach ($Path in @(
         '/health',
         '/',
@@ -225,10 +233,45 @@ function Invoke-ObservationSmoke {
             }
             Assert-NoPredictionKeys $Document
         }
+        if ($Path -eq '/reports') {
+            $ReportsHtml = [string]$Response.Content
+        }
         $Results.Add([ordered]@{
             path = $Path
             status = [int]$Response.StatusCode
             body_sha256 = Get-TextSha256 ([string]$Response.Content)
+        }) | Out-Null
+    }
+
+    $CanonicalReportPaths = [ordered]@{
+        'post-close' = 'market-actuals-title'
+        'pre-market' = 'overnight-title'
+    }
+    foreach ($ReportType in $CanonicalReportPaths.Keys) {
+        $Pattern = 'href="(?<path>/reports/[0-9]{4}-[0-9]{2}-[0-9]{2}/' +
+            [regex]::Escape($ReportType) + ')"'
+        $Match = [regex]::Match([string]$ReportsHtml, $Pattern)
+        if (-not $Match.Success) {
+            throw "Observation report link is unavailable: $ReportType"
+        }
+        $Path = [string]$Match.Groups['path'].Value
+        $Response = Invoke-WebRequest `
+            -Uri ($BaseUrl.TrimEnd('/') + $Path) `
+            -UseBasicParsing `
+            -MaximumRedirection 0 `
+            -TimeoutSec 45
+        $Body = [string]$Response.Content
+        if (
+            [int]$Response.StatusCode -ne 200 -or
+            $Body -notlike "*$($CanonicalReportPaths[$ReportType])*" -or
+            $Body -match 'forecast_probability|ranking_score|model_version|backtest_version'
+        ) {
+            throw "Observation report smoke failed: $ReportType"
+        }
+        $Results.Add([ordered]@{
+            path = $Path
+            status = [int]$Response.StatusCode
+            body_sha256 = Get-TextSha256 $Body
         }) | Out-Null
     }
     return $Results.ToArray()
@@ -493,26 +536,10 @@ try {
     $Failure = $_
     $RollbackErrors = New-Object System.Collections.Generic.List[string]
     if ($RollbackOnFailure -and $MutationStarted -and $TrafficApplied) {
-        if ($TrafficApplied) {
-            try {
-                Restore-PreviousTraffic $PreviousTrafficSpec
-            } catch {
-                $RollbackErrors.Add("traffic: $($_.Exception.Message)") | Out-Null
-            }
-        }
-        if (@(
-            $ObservationLkg.pointers |
-                Where-Object { [string]$_.applied_generation }
-        ).Count -gt 0) {
-            try {
-                & (Join-Path $PSScriptRoot 'rollback_observation.ps1') `
-                    -ReceiptPath $ResolvedLkgReceipt `
-                    -DataRoot $DataRoot `
-                    -Bucket ([string]$ObservationLkg.bucket) `
-                    -Confirm:$false | Out-Null
-            } catch {
-                $RollbackErrors.Add("pointers: $($_.Exception.Message)") | Out-Null
-            }
+        try {
+            Restore-PreviousTraffic $PreviousTrafficSpec
+        } catch {
+            $RollbackErrors.Add("traffic: $($_.Exception.Message)") | Out-Null
         }
     }
     $Receipt.status = 'FAILED'

@@ -195,7 +195,8 @@ class ReportWebTests(unittest.TestCase):
             create=True,
         ):
             client = stock_app.app.test_client()
-            bad_hash = client.get("/reports/2026-07-16/post-close")
+            with self.assertLogs(stock_app.app.logger, level="ERROR") as logs:
+                bad_hash = client.get("/reports/2026-07-16/post-close")
             bad_date = client.get("/reports/trading-day/not-a-date")
             missing = client.get("/reports/trading-day/2026-07-17")
             traversal = client.get("/reports/../../secret")
@@ -204,6 +205,12 @@ class ReportWebTests(unittest.TestCase):
         self.assertNotIn("metadata/", bad_hash.get_data(as_text=True))
         self.assertEqual(bad_hash.headers["Cache-Control"], "no-store")
         self.assertEqual(len(bad_hash.headers["X-Correlation-ID"]), 16)
+        self.assertTrue(
+            any(
+                bad_hash.headers["X-Correlation-ID"] in message
+                for message in logs.output
+            )
+        )
         self.assertEqual(bad_date.status_code, 404)
         self.assertEqual(missing.status_code, 404)
         self.assertEqual(traversal.status_code, 404)
