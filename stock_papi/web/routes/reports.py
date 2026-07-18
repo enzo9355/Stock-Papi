@@ -81,8 +81,9 @@ def register_report_routes(
 
     def _observation_page(trading_date, report_type):
         try:
+            daily_items = _daily_items(trading_date)
             item = next(
-                (value for value in _daily_items(trading_date)
+                (value for value in daily_items
                  if value.get("report_type") == report_type),
                 None,
             )
@@ -91,7 +92,25 @@ def register_report_routes(
             metadata = load_metadata_v2(item)
             if metadata is None:
                 raise ReportWebError("報告內容暫時無法使用")
-            report = build_observation_report_view(metadata)
+            expected_base_metadata_sha256 = None
+            if report_type == "pre_market":
+                post_close_item = next(
+                    (
+                        value
+                        for value in daily_items
+                        if value.get("report_type") == "post_close"
+                    ),
+                    None,
+                )
+                if post_close_item is None:
+                    raise ReportWebError("盤前報告缺少盤後基底")
+                expected_base_metadata_sha256 = post_close_item.get(
+                    "metadata_sha256"
+                )
+            report = build_observation_report_view(
+                metadata,
+                expected_base_metadata_sha256=expected_base_metadata_sha256,
+            )
             response = make_response(
                 render_template("report_observation.html", report=report)
             )
@@ -122,8 +141,10 @@ def register_report_routes(
             except ReportWebError:
                 reports = None
         try:
-            reports_v2 = _v2_reports()
-        except ReportWebError:
+            reports_v2 = _v2_reports(required=observation_mode)
+        except ReportWebError as exc:
+            if observation_mode:
+                return _report_error(503, exc=exc)
             reports_v2 = None
         response = make_response(render_template(
             "reports.html", reports=reports or [], reports_v2=reports_v2 or [],

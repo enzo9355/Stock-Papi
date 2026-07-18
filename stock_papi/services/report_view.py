@@ -101,10 +101,24 @@ def _observation_core(value: Any) -> dict[str, Any]:
         raise ReportWebError("Observation report market 不合法")
     if not isinstance(value.get("data_quality"), dict):
         raise ReportWebError("Observation report quality 不合法")
+    quality = dict(value["data_quality"])
+    available_count = quality.get("available_count")
+    symbol_count = quality.get("symbol_count")
+    if (
+        available_count is not None
+        and symbol_count is not None
+        and available_count != symbol_count
+    ):
+        raise ReportWebError("Observation report quality count 不一致")
+    quality["symbol_count"] = (
+        available_count if available_count is not None else symbol_count
+    )
+    normalized = dict(value)
+    normalized["data_quality"] = quality
     for key in _CORE_LIST_KEYS:
         if not isinstance(value.get(key), list):
             raise ReportWebError(f"Observation report {key} 不合法")
-    if not _valid_core_items(value):
+    if not _valid_core_items(normalized):
         raise ReportWebError("Observation report content schema 不合法")
     return {
         "market_observation": dict(value["market_observation"]),
@@ -113,7 +127,7 @@ def _observation_core(value: Any) -> dict[str, Any]:
         "stock_events": list(value["stock_events"]),
         "etf_observations": list(value["etf_observations"]),
         "daily_focus": list(value["daily_focus"]),
-        "data_quality": dict(value["data_quality"]),
+        "data_quality": quality,
     }
 
 
@@ -141,7 +155,9 @@ def _overnight_overlay(value: Any) -> dict[str, Any]:
     }
 
 
-def build_observation_report_view(metadata: Any) -> ObservationReportView:
+def build_observation_report_view(
+    metadata: Any, *, expected_base_metadata_sha256: str | None = None
+) -> ObservationReportView:
     if not isinstance(metadata, dict) or metadata.get("product_mode") != "observation":
         raise ReportWebError("報告不在 Observation 服務範圍")
     report_type = metadata.get("report_type")
@@ -150,10 +166,17 @@ def build_observation_report_view(metadata: Any) -> ObservationReportView:
     if report_type == "post_close":
         core = _observation_core(content)
     elif report_type == "pre_market":
+        base_metadata_sha256 = (
+            content.get("base_metadata_sha256")
+            if isinstance(content, dict)
+            else None
+        )
         if (
             not isinstance(content, dict)
-            or re.fullmatch(r"[0-9a-f]{64}", str(content.get("base_metadata_sha256") or ""))
+            or re.fullmatch(r"[0-9a-f]{64}", str(base_metadata_sha256 or ""))
             is None
+            or expected_base_metadata_sha256 is None
+            or base_metadata_sha256 != expected_base_metadata_sha256
         ):
             raise ReportWebError("Pre-market report base 不合法")
         core = _observation_core(content.get("core"))

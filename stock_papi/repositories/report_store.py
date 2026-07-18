@@ -13,7 +13,11 @@ def _version(value):
 def load_report_index(*, load_object, max_bytes, version="v1"):
     version = _version(version)
     content = load_object(f"reports/{version}/index-TW.json", max_bytes)
-    return None if content is None else validate_report_index(content)
+    return (
+        None
+        if content is None
+        else validate_report_index(content, expected_version=int(version[1:]))
+    )
 
 
 def load_report_pdf(item, *, load_object, version="v1"):
@@ -35,4 +39,10 @@ def load_report_metadata(
 ):
     version = _version(version)
     content = load_object(f"reports/{version}/{item['metadata']}", max_bytes)
-    return None if content is None else validate_report_metadata(content, item)
+    return (
+        None
+        if content is None
+        else validate_report_metadata(
+            content, item, expected_version=int(version[1:])
+        )
+    )

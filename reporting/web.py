@@ -185,7 +185,12 @@ def _validate_report_index_v2(document: dict, settings: ReportConfig) -> list[di
     return validated
 
 
-def validate_report_index(content: bytes, config: ReportConfig | None = None) -> list[dict]:
+def validate_report_index(
+    content: bytes,
+    config: ReportConfig | None = None,
+    *,
+    expected_version: int | None = None,
+) -> list[dict]:
     """同時接受嚴格驗證的 v1 與 v2 index。"""
     settings = config or ReportConfig()
     if not isinstance(content, bytes) or not 0 < len(content) <= settings.max_index_bytes:
@@ -196,9 +201,12 @@ def validate_report_index(content: bytes, config: ReportConfig | None = None) ->
         raise ReportWebError("報告索引格式不合法") from exc
     if not isinstance(document, dict):
         raise ReportWebError("報告索引必須是 JSON object")
-    if document.get("schema_version") == 1:
+    version = document.get("schema_version")
+    if expected_version is not None and version != expected_version:
+        raise ReportWebError("報告索引 schema 版本不符")
+    if version == 1:
         return _validate_report_index_v1(content, settings)
-    if document.get("schema_version") == 2:
+    if version == 2:
         return _validate_report_index_v2(document, settings)
     raise ReportWebError("報告索引 schema 不支援")
 
@@ -214,7 +222,9 @@ def find_report(reports: list[dict], report_date: str) -> dict | None:
     return next((item for item in reports if item["report_date"] == report_date), None)
 
 
-def validate_report_metadata(content: bytes, item: dict) -> dict:
+def validate_report_metadata(
+    content: bytes, item: dict, *, expected_version: int | None = None
+) -> dict:
     """驗證 content-addressed metadata，並綁定已驗證 index 項目。"""
     if not isinstance(content, bytes) or not 0 < len(content) <= 2 * 1024 * 1024:
         raise ReportWebError("報告 metadata 大小不合法")
@@ -226,8 +236,13 @@ def validate_report_metadata(content: bytes, item: dict) -> dict:
         raise ReportWebError("報告 metadata 格式不合法") from exc
     if not isinstance(document, dict):
         raise ReportWebError("報告 metadata 必須是 JSON object")
-    if document.get("schema_version") == 2:
+    version = document.get("schema_version")
+    if expected_version is not None and version != expected_version:
+        raise ReportWebError("報告 metadata schema 版本不符")
+    if version == 2:
         return _validate_report_metadata_v2(document, item)
+    if version != 1:
+        raise ReportWebError("報告 metadata schema 不支援")
     expected = {
         "schema_version": 1,
         "kind": "daily-industry-report",

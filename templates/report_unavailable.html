@@ -5,10 +5,10 @@
 <article class="page report-detail-page">
   <section class="panel empty-state" role="alert">
     <p class="eyebrow">REPORT STATUS</p>
-    <h1>{% if status == 503 %}報告暫時無法使用{% else %}報告頁面發生錯誤{% endif %}</h1>
-    <p>請稍後再試，或返回每日報告。</p>
+    <h1>{% if status == 503 %}報告暫時無法讀取{% else %}報告頁面發生錯誤{% endif %}</h1>
+    <p>該份報告目前無法完成完整性驗證。系統沒有執行新的寫入操作，請稍後重試。</p>
     <p class="muted small">追蹤代碼：{{ correlation_id }}</p>
-    <a class="button" href="{{ url_for('reports_page') }}">返回每日報告</a>
+    <div class="report-actions"><a class="button" href="{{ url_for('reports_page') }}">返回每日報告</a><a class="button secondary" href="{{ url_for('dashboard_page') }}">返回今天市場</a></div>
   </section>
 </article>
 {% endblock %}

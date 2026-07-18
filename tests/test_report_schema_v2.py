@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from reporting.exceptions import ReportPublishError
+from reporting.exceptions import ReportPublishError, ReportWebError
 from reporting.publisher import publish_report_v2
 from reporting.web import validate_report_index, validate_report_metadata
 
@@ -64,6 +64,21 @@ class ReportSchemaV2Tests(unittest.TestCase):
         self.assertEqual(result[0]["report_type"], "post_close")
         self.assertEqual(result[0]["source_market_date"], "2026-07-14")
         self.assertEqual(result[0]["applicable_trading_date"], "2026-07-14")
+
+        with self.assertRaises(ReportWebError):
+            validate_report_index(
+                json.dumps(legacy).encode("utf-8"), expected_version=2
+            )
+
+        legacy_metadata = json.dumps(
+            {"schema_version": 1}, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        with self.assertRaises(ReportWebError):
+            validate_report_metadata(
+                legacy_metadata,
+                {"metadata_sha256": hashlib.sha256(legacy_metadata).hexdigest()},
+                expected_version=2,
+            )
 
     def test_v2_publishes_post_close_and_pre_market_for_same_applicable_day(self):
         with tempfile.TemporaryDirectory() as temporary:

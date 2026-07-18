@@ -1,5 +1,6 @@
 import datetime
 import copy
+import hashlib
 import json
 import os
 import tempfile
@@ -15,6 +16,7 @@ import app as stock_app
 
 from reporting.observation_v2 import build_post_close_observation_metadata
 from reporting.publisher import publish_report_v2
+from reporting.web import validate_report_index
 from tests.test_observation_public_surfaces import observation_dashboard
 
 
@@ -57,17 +59,27 @@ class ReportWebTests(unittest.TestCase):
         post_close["summary"] = ["市場廣度維持中性"]
         publish_report_v2(root, post_close)
 
+        publish = root / "publish" / "reports" / "v2"
+        post_close_item = next(
+            item
+            for item in validate_report_index((publish / "index-TW.json").read_bytes())
+            if item["report_type"] == "post_close"
+        )
+
         pre_market = copy.deepcopy(post_close)
+        pre_market_content = copy.deepcopy(shapes["pre_market_content"])
+        pre_market_content["base_metadata_sha256"] = post_close_item[
+            "metadata_sha256"
+        ]
         pre_market.update(
             report_type="pre_market",
             published_at="2026-07-16T23:30:00Z",
             title="2026-07-16 盤前風險更新",
             summary=["隔夜訊號分歧"],
             warnings=[],
-            content=shapes["pre_market_content"],
+            content=pre_market_content,
         )
         publish_report_v2(root, pre_market)
-        publish = root / "publish" / "reports" / "v2"
         objects = {
             f"reports/v2/{path.relative_to(publish).as_posix()}": path.read_bytes()
             for path in publish.rglob("*")
@@ -94,6 +106,7 @@ class ReportWebTests(unittest.TestCase):
         self.assertIn("盤後市場觀察", post_close.get_data(as_text=True))
         self.assertEqual(pre_market.status_code, 200)
         self.assertIn("隔夜訊號分歧", pre_market.get_data(as_text=True))
+        self.assertIn("有效標的</dt><dd>1042</dd>", post_close.get_data(as_text=True))
         self.assertEqual(legacy_index.status_code, 200)
         index_html = legacy_index.get_data(as_text=True)
         self.assertIn("/reports/2026-07-16/post-close", index_html)
@@ -155,7 +168,8 @@ class ReportWebTests(unittest.TestCase):
             preview = client.get("/reports/2026-07-03/preview")
             download = client.get("/reports/2026-07-03/download")
 
-        self.assertEqual(listing.status_code, 200)
+        self.assertEqual(listing.status_code, 503)
+        self.assertEqual(listing.headers["Cache-Control"], "no-store")
         self.assertEqual(report.status_code, 404)
         self.assertEqual(preview.status_code, 302)
         self.assertEqual(download.status_code, 302)
@@ -163,7 +177,7 @@ class ReportWebTests(unittest.TestCase):
 
     def test_empty_reports_page_has_clear_state(self):
         with patch.object(
-            stock_app, "_gcs_get_report_v2_object", return_value=None, create=True
+            stock_app, "_published_report_index_v2", return_value=[]
         ):
             response = stock_app.app.test_client().get("/reports")
 
@@ -172,6 +186,90 @@ class ReportWebTests(unittest.TestCase):
             "目前沒有可用的每日報告",
             response.get_data(as_text=True),
         )
+
+    def test_missing_report_index_has_dedicated_503_state(self):
+        with patch.object(
+            stock_app, "_gcs_get_report_v2_object", return_value=None, create=True
+        ):
+            response = stock_app.app.test_client().get("/reports")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(response.headers["Retry-After"], "60")
+        self.assertIn("報告暫時無法", response.get_data(as_text=True))
+
+    def test_pre_market_rejects_wrong_post_close_lineage(self):
+        temporary, objects = self._production_shaped_objects()
+        self.addCleanup(temporary.cleanup)
+        index = json.loads(objects["reports/v2/index-TW.json"])
+        pre_market = next(
+            item for item in index["reports"] if item["report_type"] == "pre_market"
+        )
+        metadata_path = f"reports/v2/{pre_market['metadata']}"
+        metadata = json.loads(objects[metadata_path])
+        metadata["content"]["base_metadata_sha256"] = "f" * 64
+        content_bytes = json.dumps(
+            metadata["content"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        metadata["content_sha256"] = hashlib.sha256(content_bytes).hexdigest()
+        pre_market["content_sha256"] = metadata["content_sha256"]
+        encoded = json.dumps(
+            metadata,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        metadata_sha256 = hashlib.sha256(encoded).hexdigest()
+        pre_market["metadata"] = f"metadata/{metadata_sha256}.json"
+        pre_market["metadata_sha256"] = metadata_sha256
+        objects["reports/v2/index-TW.json"] = json.dumps(
+            index,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        objects[f"reports/v2/{pre_market['metadata']}"] = encoded
+
+        with patch.object(
+            stock_app,
+            "_gcs_get_report_v2_object",
+            side_effect=lambda path, _size: objects.get(path),
+            create=True,
+        ):
+            response = stock_app.app.test_client().get(
+                "/reports/2026-07-16/pre-market"
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    def test_unexpected_report_render_error_is_safe_and_correlated(self):
+        temporary, objects, _metadata = self._objects()
+        self.addCleanup(temporary.cleanup)
+
+        with patch.object(
+            stock_app,
+            "_gcs_get_report_v2_object",
+            side_effect=lambda path, _size: objects.get(path),
+            create=True,
+        ), patch(
+            "stock_papi.web.routes.reports.build_observation_report_view",
+            side_effect=RuntimeError("private object detail"),
+        ), self.assertLogs(stock_app.app.logger, level="ERROR") as logs:
+            response = stock_app.app.test_client().get(
+                "/reports/2026-07-16/post-close"
+            )
+
+        correlation_id = response.headers["X-Correlation-ID"]
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertNotIn("private object detail", body)
+        self.assertIn(correlation_id, body)
+        self.assertTrue(any(correlation_id in message for message in logs.output))
 
     def test_sample_download_redirects_to_public_html_list(self):
         response = stock_app.app.test_client().get("/reports/sample/download")

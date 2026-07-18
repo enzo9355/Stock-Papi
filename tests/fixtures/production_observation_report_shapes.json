@@ -15,8 +15,9 @@
     "daily_focus": ["市場廣度維持中性"],
     "data_quality": {
       "coverage": 0.9971,
-      "symbol_count": 1042,
-      "failure_count": 3
+      "available_count": 1042,
+      "failure_count": 3,
+      "universe_count": 1045
     }
   },
   "pre_market_content": {
@@ -36,8 +37,9 @@
       "daily_focus": ["市場廣度維持中性"],
       "data_quality": {
         "coverage": 0.9971,
-        "symbol_count": 1042,
-        "failure_count": 3
+        "available_count": 1042,
+        "failure_count": 3,
+        "universe_count": 1045
       }
     },
     "base_metadata_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
