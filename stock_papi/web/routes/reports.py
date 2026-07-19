@@ -8,6 +8,8 @@ from flask import abort, make_response, redirect, render_template, url_for
 
 from reporting.exceptions import ReportWebError
 from reporting.web import find_report
+from reporting.professional_builder import build_professional_post_close_report
+from reporting.professional_html import build_professional_report_view
 from stock_papi.services.report_view import build_observation_report_view
 from werkzeug.exceptions import HTTPException
 
@@ -92,8 +94,8 @@ def register_report_routes(
             metadata = load_metadata_v2(item)
             if metadata is None:
                 raise ReportWebError("報告內容暫時無法使用")
-            expected_base_metadata_sha256 = None
             if report_type == "pre_market":
+                expected_base_metadata_sha256 = None
                 post_close_item = next(
                     (
                         value
@@ -107,13 +109,29 @@ def register_report_routes(
                 expected_base_metadata_sha256 = post_close_item.get(
                     "metadata_sha256"
                 )
-            report = build_observation_report_view(
-                metadata,
-                expected_base_metadata_sha256=expected_base_metadata_sha256,
-            )
-            response = make_response(
-                render_template("report_observation.html", report=report)
-            )
+                report = build_observation_report_view(
+                    metadata,
+                    expected_base_metadata_sha256=expected_base_metadata_sha256,
+                )
+                response = make_response(
+                    render_template("report_observation.html", report=report)
+                )
+            elif report_type == "post_close":
+                code_commit_sha = str(metadata.get("code_commit_sha") or "")
+                import re
+                if not re.fullmatch(r"[0-9a-f]{7,64}", code_commit_sha):
+                    code_commit_sha = "0" * 40
+                prof_report = build_professional_post_close_report(
+                    metadata, code_commit_sha=code_commit_sha
+                )
+                view_model = build_professional_report_view(
+                    prof_report, pdf_download_url=f"/reports/{trading_date}/download"
+                )
+                response = make_response(
+                    render_template("reports/post_close_professional.html", report=view_model)
+                )
+            else:
+                abort(404)
             return _secure_response(response)
         except ReportWebError as exc:
             return _report_error(
