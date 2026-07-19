@@ -129,6 +129,29 @@ def _build_next_session(market: Mapping[str, Any], source_date: str) -> dict[str
         },
     }
 
+def _build_capital_flows(data: Any, source_date: str) -> dict[str, Any]:
+    if not isinstance(data, dict) or not data:
+        return {
+            "status": "unavailable",
+            "reason": "法人流向尚未納入目前的已驗證 Observation Artifact",
+            "data": {},
+        }
+    
+    # minimal content requirements
+    foreign_net = data.get("foreign_net")
+    if type(foreign_net) not in (int, float):
+        return {
+            "status": "unavailable",
+            "reason": "法人流向資料品質驗證失敗",
+            "data": {},
+        }
+
+    return {
+        "status": "available",
+        "data_as_of": source_date,
+        "data": copy.deepcopy(data),
+    }
+
 
 def _industry_section(items: list[Any]) -> dict[str, Any]:
     normalized = []
@@ -243,15 +266,7 @@ def build_professional_post_close_report(
             "data_as_of": source_date,
             "data": copy.deepcopy(dict(market)),
         },
-        "capital_flows": {
-            "status": "available",
-            "data_as_of": source_date,
-            "data": copy.deepcopy(content["capital_flows"]),
-        } if isinstance(content.get("capital_flows"), dict) else {
-            "status": "unavailable",
-            "reason": "法人流向尚未納入目前的已驗證 Observation Artifact",
-            "data": {},
-        },
+        "capital_flows": _build_capital_flows(content.get("capital_flows"), source_date),
         "industries": {
             "status": "available",
             "data_as_of": source_date,
@@ -273,7 +288,9 @@ def build_professional_post_close_report(
                 ],
                 "high_anomaly_observations": [
                     e for e in stock_events
-                    if isinstance(e, dict) and e.get("severity") == "high"
+                    if isinstance(e, dict) 
+                    and e.get("severity") == "high" 
+                    and e.get("event_type") in ("volume_surge", "new_high_20d", "volume_dry_up", "new_low_20d", "rsi_oversold", "rsi_overbought", "data_warning")
                 ],
             },
         },

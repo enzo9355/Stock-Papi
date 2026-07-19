@@ -113,6 +113,9 @@ class ProfessionalReportBuilderTests(unittest.TestCase):
 
     def test_stock_event_classification(self):
         metadata = self._metadata()
+        metadata["content"]["stock_events"].append(
+            {"symbol": "9999", "name": "TestUnknownHigh", "observation": "未知異常", "as_of": "2026-07-17", "metric_value": 1.4, "unit": "倍", "event_type": "unknown_event", "severity": "high"}
+        )
         report = build_professional_post_close_report(metadata, code_commit_sha="b" * 40)
         securities = report.securities.data
         
@@ -132,9 +135,11 @@ class ProfessionalReportBuilderTests(unittest.TestCase):
         self.assertNotIn("1111", positives)
         self.assertNotIn("1111", risks)
         
-        # high severity should be in high_anomaly
+        # high severity should be in high_anomaly if it's a valid event type
         self.assertIn("0000", high_anomalies)
-        self.assertNotIn("2330", high_anomalies)
+        
+        # unknown_event with high severity must NOT enter high_anomaly
+        self.assertNotIn("9999", high_anomalies)
         self.assertNotIn("1111", high_anomalies)
         
     def test_next_session_structured_logic(self):

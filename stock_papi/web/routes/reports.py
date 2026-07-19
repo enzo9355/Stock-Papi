@@ -1,6 +1,7 @@
 """Public HTML report routes and legacy compatibility redirects."""
 
 import datetime
+import os
 import re
 import uuid
 
@@ -81,26 +82,39 @@ def register_report_routes(
             and item.get("report_type") in {"post_close", "pre_market"}
         ]
 
-    def _observation_page(trading_date, report_type):
+    def _observation_page(date_param: str, report_type: str):
         try:
-            daily_items = _daily_items(trading_date)
-            item = next(
-                (value for value in daily_items
-                 if value.get("report_type") == report_type),
-                None,
-            )
+            reports = _v2_reports(required=True)
+            if report_type == "post_close":
+                # For post_close, date_param is source_market_date
+                item = next(
+                    (value for value in reports
+                     if value.get("report_type") == report_type
+                     and value.get("source_market_date") == date_param),
+                    None,
+                )
+            else:
+                # For pre_market, date_param is applicable_trading_date
+                item = next(
+                    (value for value in reports
+                     if value.get("report_type") == report_type
+                     and value.get("applicable_trading_date") == date_param),
+                    None,
+                )
+
             if item is None:
                 abort(404)
             metadata = load_metadata_v2(item)
             if metadata is None:
                 raise ReportWebError("報告內容暫時無法使用")
+            
             if report_type == "pre_market":
                 expected_base_metadata_sha256 = None
                 post_close_item = next(
                     (
-                        value
-                        for value in daily_items
+                        value for value in reports
                         if value.get("report_type") == "post_close"
+                        and value.get("applicable_trading_date") == date_param
                     ),
                     None,
                 )
@@ -117,15 +131,20 @@ def register_report_routes(
                     render_template("report_observation.html", report=report)
                 )
             elif report_type == "post_close":
-                code_commit_sha = str(metadata.get("code_commit_sha") or "")
+                code_commit_sha = os.environ.get("RENDER_GIT_COMMIT", os.environ.get("K_REVISION", ""))
                 import re
                 if not re.fullmatch(r"[0-9a-f]{7,64}", code_commit_sha):
-                    code_commit_sha = "0" * 40
+                    raise ReportWebError("缺少有效的 Code Commit SHA")
                 prof_report = build_professional_post_close_report(
                     metadata, code_commit_sha=code_commit_sha
                 )
+                
+                pdf_download_url = None
+                if metadata.get("pdf_asset_sha256"):
+                    pdf_download_url = f"/reports/{date_param}/download"
+                    
                 view_model = build_professional_report_view(
-                    prof_report, pdf_download_url=f"/reports/{trading_date}/download"
+                    prof_report, pdf_download_url=pdf_download_url
                 )
                 response = make_response(
                     render_template("reports/post_close_professional.html", report=view_model)
@@ -137,7 +156,7 @@ def register_report_routes(
             return _report_error(
                 503,
                 report_type=report_type,
-                report_date=trading_date,
+                report_date=date_param,
                 exc=exc,
             )
         except HTTPException:
@@ -146,7 +165,7 @@ def register_report_routes(
             return _report_error(
                 500,
                 report_type=report_type,
-                report_date=trading_date,
+                report_date=date_param,
                 exc=exc,
             )
 

@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("LINE_CHANNEL_ACCESS_TOKEN", "test")
 os.environ.setdefault("LINE_CHANNEL_SECRET", "test")
+os.environ.setdefault("RENDER_GIT_COMMIT", "b" * 40)
 
 import app as stock_app
 
@@ -33,6 +34,7 @@ class ReportWebTests(unittest.TestCase):
         metadata = build_post_close_observation_metadata(
             observation_dashboard(), Calendar()
         )
+        metadata["code_commit_sha"] = "b" * 40
         publish_report_v2(root, metadata)
         publish = root / "publish" / "reports" / "v2"
         objects = {
@@ -57,6 +59,7 @@ class ReportWebTests(unittest.TestCase):
         )
         post_close["content"] = shapes["post_close_content"]
         post_close["summary"] = ["市場廣度維持中性"]
+        post_close["code_commit_sha"] = "b" * 40
         publish_report_v2(root, post_close)
 
         publish = root / "publish" / "reports" / "v2"
@@ -98,7 +101,7 @@ class ReportWebTests(unittest.TestCase):
             create=True,
         ):
             client = stock_app.app.test_client()
-            post_close = client.get("/reports/2026-07-16/post-close")
+            post_close = client.get("/reports/2026-07-15/post-close")
             pre_market = client.get("/reports/2026-07-16/pre-market")
             legacy_index = client.get("/reports/trading-day/2026-07-16")
 
@@ -109,7 +112,7 @@ class ReportWebTests(unittest.TestCase):
         self.assertIn("有效標的</dt><dd>1042</dd>", post_close.get_data(as_text=True))
         self.assertEqual(legacy_index.status_code, 200)
         index_html = legacy_index.get_data(as_text=True)
-        self.assertIn("/reports/2026-07-16/post-close", index_html)
+        self.assertIn("/reports/2026-07-15/post-close", index_html)
         self.assertIn("/reports/2026-07-16/pre-market", index_html)
 
     def test_v2_observation_report_is_the_only_formal_report_surface(self):
@@ -124,7 +127,7 @@ class ReportWebTests(unittest.TestCase):
         ):
             client = stock_app.app.test_client()
             listing = client.get("/reports")
-            trading_day = client.get("/reports/2026-07-16/post-close")
+            trading_day = client.get("/reports/2026-07-15/post-close")
             pre_market = client.get("/reports/2026-07-16/pre-market")
             weekly = client.get("/reports/weekly/2026-W29")
 
@@ -253,7 +256,7 @@ class ReportWebTests(unittest.TestCase):
             side_effect=RuntimeError("private object detail"),
         ), self.assertLogs(stock_app.app.logger, level="ERROR") as logs:
             response = stock_app.app.test_client().get(
-                "/reports/2026-07-16/post-close"
+                "/reports/2026-07-15/post-close"
             )
 
         correlation_id = response.headers["X-Correlation-ID"]
@@ -287,7 +290,7 @@ class ReportWebTests(unittest.TestCase):
         ):
             client = stock_app.app.test_client()
             with self.assertLogs(stock_app.app.logger, level="ERROR") as logs:
-                bad_hash = client.get("/reports/2026-07-16/post-close")
+                bad_hash = client.get("/reports/2026-07-15/post-close")
             bad_date = client.get("/reports/trading-day/not-a-date")
             missing = client.get("/reports/trading-day/2026-07-17")
             traversal = client.get("/reports/../../secret")
