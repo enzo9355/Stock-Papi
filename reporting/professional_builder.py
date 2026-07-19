@@ -51,8 +51,13 @@ def _executive_summary(
         and type(item.get("relative_return_5d_pct")) in (int, float)
     ]
     ranked.sort(key=lambda item: item["relative_return_5d_pct"], reverse=True)
-    strongest = [item["name"] for item in ranked[:3]]
-    weakest = [item["name"] for item in reversed(ranked[-3:])]
+    edge_count = min(3, max(1, len(ranked) // 2)) if ranked else 0
+    strongest = [item["name"] for item in ranked[:edge_count]]
+    weakest = (
+        [item["name"] for item in reversed(ranked[-edge_count:])]
+        if edge_count
+        else []
+    )
     supporting = []
     opposing = []
     if type(breadth) in (int, float):
@@ -233,16 +238,17 @@ def build_professional_post_close_report(
             "data_as_of": source_date,
             "data": {
                 "gates": {
-                    "ranking": "FAIL",
-                    "calibration": "FAIL",
-                    "quality": "FAIL",
-                    "transaction_value": "FAIL",
+                    "ranking": "UNAVAILABLE",
+                    "calibration": "UNAVAILABLE",
+                    "quality": "UNAVAILABLE",
+                    "transaction_value": "UNAVAILABLE",
                     "promotion": "BLOCKED",
                 },
                 "probability_allowed": False,
                 "ranking_allowed": False,
                 "strong_action_allowed": False,
                 "performance_endorsement_allowed": False,
+                "gate_detail_status": "not_present_in_observation_metadata",
             },
         },
         "next_session": {
