@@ -1,7 +1,7 @@
 import unittest
 import copy
 
-from reporting.professional_builder import build_professional_post_close_report
+from reporting.professional_builder import build_professional_post_close_artifact
 from reporting.professional_schema import ProfessionalPostCloseReport, compute_content_sha256
 
 
@@ -57,7 +57,7 @@ class ProfessionalReportBuilderTests(unittest.TestCase):
         }
 
     def test_builds_canonical_report_from_verified_observation_metadata(self):
-        report = build_professional_post_close_report(
+        report = build_professional_post_close_artifact(
             self._metadata(), code_commit_sha="b" * 40
         )
         document = report.to_document()
@@ -78,37 +78,41 @@ class ProfessionalReportBuilderTests(unittest.TestCase):
     def test_preserves_missing_market_values_as_none(self):
         metadata = self._metadata()
         metadata["content"]["market_observation"]["realized_volatility_20d_pct"] = None
-        report = build_professional_post_close_report(metadata, code_commit_sha="b" * 40)
+        report = build_professional_post_close_artifact(metadata, code_commit_sha="b" * 40)
         self.assertIsNone(report.market.data["realized_volatility_20d_pct"])
 
     def test_rejects_pre_market_metadata(self):
         metadata = self._metadata()
         metadata["report_type"] = "pre_market"
         with self.assertRaisesRegex(ValueError, "post_close"):
-            build_professional_post_close_report(metadata, code_commit_sha="b" * 40)
+            build_professional_post_close_artifact(metadata, code_commit_sha="b" * 40)
 
     def test_rejects_probability_enabled_metadata(self):
         metadata = self._metadata()
         metadata["prediction_capability"]["probability_allowed"] = True
         with self.assertRaisesRegex(ValueError, "probability"):
-            build_professional_post_close_report(metadata, code_commit_sha="b" * 40)
+            build_professional_post_close_artifact(metadata, code_commit_sha="b" * 40)
             
     def test_capital_flows_absent_is_unavailable(self):
         metadata = self._metadata()
-        report = build_professional_post_close_report(metadata, code_commit_sha="b" * 40)
+        report = build_professional_post_close_artifact(metadata, code_commit_sha="b" * 40)
         self.assertEqual(report.capital_flows.status, "unavailable")
 
     def test_capital_flows_valid_is_available(self):
         metadata = self._metadata()
-        metadata["content"]["capital_flows"] = {"foreign_net": 100}
-        report = build_professional_post_close_report(metadata, code_commit_sha="b" * 40)
+        metadata["content"]["capital_flows"] = {
+            "as_of": "2026-07-17",
+            "unit": "TWD_million",
+            "foreign_net": 100,
+        }
+        report = build_professional_post_close_artifact(metadata, code_commit_sha="b" * 40)
         self.assertEqual(report.capital_flows.status, "available")
         self.assertEqual(report.capital_flows.data["foreign_net"], 100)
 
     def test_capital_flows_invalid_type_is_unavailable(self):
         metadata = self._metadata()
         metadata["content"]["capital_flows"] = "some text"
-        report = build_professional_post_close_report(metadata, code_commit_sha="b" * 40)
+        report = build_professional_post_close_artifact(metadata, code_commit_sha="b" * 40)
         self.assertEqual(report.capital_flows.status, "unavailable")
 
     def test_stock_event_classification(self):
@@ -116,7 +120,7 @@ class ProfessionalReportBuilderTests(unittest.TestCase):
         metadata["content"]["stock_events"].append(
             {"symbol": "9999", "name": "TestUnknownHigh", "observation": "未知異常", "as_of": "2026-07-17", "metric_value": 1.4, "unit": "倍", "event_type": "unknown_event", "severity": "high"}
         )
-        report = build_professional_post_close_report(metadata, code_commit_sha="b" * 40)
+        report = build_professional_post_close_artifact(metadata, code_commit_sha="b" * 40)
         securities = report.securities.data
         
         positives = [e["symbol"] for e in securities["positive_observations"]]
@@ -148,7 +152,7 @@ class ProfessionalReportBuilderTests(unittest.TestCase):
         # test weak state
         metadata["content"]["market_observation"]["ma20_breadth_pct"] = 35.0
         metadata["content"]["market_observation"]["realized_volatility_20d_pct"] = 25.0
-        report = build_professional_post_close_report(metadata, code_commit_sha="b" * 40)
+        report = build_professional_post_close_artifact(metadata, code_commit_sha="b" * 40)
         next_session = report.next_session.data
         self.assertTrue(any("偏弱" in s for s in next_session["negative"]))
         self.assertTrue(any("系統性風險" in s for s in next_session["negative"]))
@@ -157,7 +161,7 @@ class ProfessionalReportBuilderTests(unittest.TestCase):
         # test strong state
         metadata["content"]["market_observation"]["ma20_breadth_pct"] = 70.0
         metadata["content"]["market_observation"]["realized_volatility_20d_pct"] = 15.0
-        report2 = build_professional_post_close_report(metadata, code_commit_sha="b" * 40)
+        report2 = build_professional_post_close_artifact(metadata, code_commit_sha="b" * 40)
         next_session2 = report2.next_session.data
         self.assertTrue(any("強勢" in s for s in next_session2["positive"]))
         self.assertEqual(len(next_session2["negative"]), 0)

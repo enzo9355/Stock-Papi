@@ -9,7 +9,6 @@ from flask import abort, make_response, redirect, render_template, url_for
 
 from reporting.exceptions import ReportWebError
 from reporting.web import find_report
-from reporting.professional_builder import build_professional_post_close_report
 from reporting.professional_html import build_professional_report_view
 from stock_papi.services.report_view import build_observation_report_view
 from werkzeug.exceptions import HTTPException
@@ -25,7 +24,7 @@ def _valid_report_date(report_date):
 
 def register_report_routes(
     app, *, load_index, load_metadata, load_index_v2, load_metadata_v2,
-    prediction_capability=None,
+    load_canonical_object=None, prediction_capability=None,
 ):
     observation_mode = (
         prediction_capability is not None
@@ -131,18 +130,25 @@ def register_report_routes(
                     render_template("report_observation.html", report=report)
                 )
             elif report_type == "post_close":
-                code_commit_sha = os.environ.get("RENDER_GIT_COMMIT", os.environ.get("K_REVISION", ""))
-                import re
-                if not re.fullmatch(r"[0-9a-f]{7,64}", code_commit_sha):
-                    raise ReportWebError("缺少有效的 Code Commit SHA")
-                prof_report = build_professional_post_close_report(
-                    metadata, code_commit_sha=code_commit_sha
-                )
+                canonical_ptr = metadata.get("professional_report")
+                if not isinstance(canonical_ptr, dict) or not canonical_ptr.get("object"):
+                    raise ReportWebError("報告 Canonical Object 指標遺失")
+                if load_canonical_object is None:
+                    raise ReportWebError("系統未提供 load_canonical_object")
                 
+                import hashlib
+                try:
+                    canonical_doc = load_canonical_object(canonical_ptr["object"])
+                except Exception as exc:
+                    raise ReportWebError("無法讀取 Canonical Object") from exc
+                
+                from reporting.professional_schema import ProfessionalPostCloseReport
+                try:
+                    prof_report = ProfessionalPostCloseReport.from_document(canonical_doc)
+                except ValueError as exc:
+                    raise ReportWebError("Canonical Object 驗證失敗") from exc
+
                 pdf_download_url = None
-                if metadata.get("pdf_asset_sha256"):
-                    pdf_download_url = f"/reports/{date_param}/download"
-                    
                 view_model = build_professional_report_view(
                     prof_report, pdf_download_url=pdf_download_url
                 )

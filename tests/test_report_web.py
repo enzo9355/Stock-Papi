@@ -34,8 +34,11 @@ class ReportWebTests(unittest.TestCase):
         metadata = build_post_close_observation_metadata(
             observation_dashboard(), Calendar()
         )
-        metadata["code_commit_sha"] = "b" * 40
-        publish_report_v2(root, metadata)
+        from reporting.professional_builder import build_professional_post_close_artifact
+        prof_report = build_professional_post_close_artifact(
+            metadata, code_commit_sha="b" * 40
+        )
+        publish_report_v2(root, metadata, professional_report=prof_report)
         publish = root / "publish" / "reports" / "v2"
         objects = {
             f"reports/v2/{path.relative_to(publish).as_posix()}": path.read_bytes()
@@ -59,8 +62,11 @@ class ReportWebTests(unittest.TestCase):
         )
         post_close["content"] = shapes["post_close_content"]
         post_close["summary"] = ["市場廣度維持中性"]
-        post_close["code_commit_sha"] = "b" * 40
-        publish_report_v2(root, post_close)
+        from reporting.professional_builder import build_professional_post_close_artifact
+        prof_report = build_professional_post_close_artifact(
+            post_close, code_commit_sha="b" * 40
+        )
+        publish_report_v2(root, post_close, professional_report=prof_report)
 
         publish = root / "publish" / "reports" / "v2"
         post_close_item = next(
@@ -82,6 +88,8 @@ class ReportWebTests(unittest.TestCase):
             warnings=[],
             content=pre_market_content,
         )
+        # Drop professional_report pointer from pre_market if any
+        pre_market.pop("professional_report", None)
         publish_report_v2(root, pre_market)
         objects = {
             f"reports/v2/{path.relative_to(publish).as_posix()}": path.read_bytes()
@@ -97,7 +105,7 @@ class ReportWebTests(unittest.TestCase):
         with patch.object(
             stock_app,
             "_gcs_get_report_v2_object",
-            side_effect=lambda path, _size: objects.get(path),
+            side_effect=lambda path, _size: objects.get(path) if path.startswith("reports/v2/") else objects.get(f"reports/v2/{path}"),
             create=True,
         ):
             client = stock_app.app.test_client()
@@ -122,7 +130,7 @@ class ReportWebTests(unittest.TestCase):
         with patch.object(
             stock_app,
             "_gcs_get_report_v2_object",
-            side_effect=lambda path, _size: objects.get(path),
+            side_effect=lambda path, _size: objects.get(path) if path.startswith("reports/v2/") else objects.get(f"reports/v2/{path}"),
             create=True,
         ):
             client = stock_app.app.test_client()
@@ -249,11 +257,11 @@ class ReportWebTests(unittest.TestCase):
         with patch.object(
             stock_app,
             "_gcs_get_report_v2_object",
-            side_effect=lambda path, _size: objects.get(path),
+            side_effect=lambda path, _size: objects.get(path) if path.startswith("reports/v2/") else objects.get(f"reports/v2/{path}"),
             create=True,
         ), patch(
-            "stock_papi.web.routes.reports.build_professional_post_close_report",
-            side_effect=RuntimeError("private object detail"),
+            "stock_papi.web.routes.reports.build_professional_report_view",
+            side_effect=RuntimeError("private object detail")
         ), self.assertLogs(stock_app.app.logger, level="ERROR") as logs:
             response = stock_app.app.test_client().get(
                 "/reports/2026-07-15/post-close"

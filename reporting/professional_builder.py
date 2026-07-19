@@ -19,6 +19,21 @@ def _require_mapping(value: Any, label: str) -> Mapping[str, Any]:
         raise ValueError(f"{label} must be an object")
     return value
 
+EVENT_CLASSIFICATION_POLICY_VERSION = "1.0"
+SEVERITIES = frozenset({"low", "medium", "high"})
+
+# Define formal event classification policy.
+# Keys are event_types, values are dicts containing 'category' (positive/risk) and 'severity'
+EVENT_POLICY_TABLE = {
+    "volume_surge": {"category": "positive", "severity": "medium"},
+    "new_high_20d": {"category": "positive", "severity": "high"},
+    "volume_dry_up": {"category": "risk", "severity": "medium"},
+    "new_low_20d": {"category": "risk", "severity": "high"},
+    "rsi_oversold": {"category": "risk", "severity": "medium"},
+    "rsi_overbought": {"category": "risk", "severity": "medium"},
+    "data_warning": {"category": "risk", "severity": "high"},
+}
+
 
 def _market_state(ma20_breadth_pct: Any) -> str:
     if type(ma20_breadth_pct) not in (int, float):
@@ -137,19 +152,54 @@ def _build_capital_flows(data: Any, source_date: str) -> dict[str, Any]:
             "data": {},
         }
     
-    # minimal content requirements
-    foreign_net = data.get("foreign_net")
-    if type(foreign_net) not in (int, float):
+    if data.get("as_of") != source_date:
         return {
             "status": "unavailable",
-            "reason": "法人流向資料品質驗證失敗",
+            "reason": "法人流向日期與報告基準日不符",
+            "data": {},
+        }
+    
+    if data.get("unit") != "TWD_million":
+        return {
+            "status": "unavailable",
+            "reason": "法人流向單位不符預期",
+            "data": {},
+        }
+
+    foreign_net = data.get("foreign_net")
+    investment_trust_net = data.get("investment_trust_net")
+    dealer_net = data.get("dealer_net")
+
+    import math
+
+    def validate_finite(val: Any) -> float | None:
+        if isinstance(val, bool) or type(val) not in (int, float):
+            return None
+        f = float(val)
+        return f if math.isfinite(f) else None
+
+    f_val = validate_finite(foreign_net)
+    it_val = validate_finite(investment_trust_net)
+    d_val = validate_finite(dealer_net)
+
+    if f_val is None and it_val is None and d_val is None:
+        return {
+            "status": "unavailable",
+            "reason": "缺乏有效的法人流向數值",
             "data": {},
         }
 
     return {
         "status": "available",
         "data_as_of": source_date,
-        "data": copy.deepcopy(data),
+        "data": {
+            "schema_version": 1,
+            "as_of": source_date,
+            "unit": "TWD_million",
+            "foreign_net": f_val,
+            "investment_trust_net": it_val,
+            "dealer_net": d_val,
+        },
     }
 
 
@@ -190,7 +240,7 @@ def _industry_section(items: list[Any]) -> dict[str, Any]:
     return {"ranking": normalized}
 
 
-def build_professional_post_close_report(
+def build_professional_post_close_artifact(
     metadata: Mapping[str, Any], *, code_commit_sha: str
 ) -> ProfessionalPostCloseReport:
     """Convert verified observation post-close metadata into the canonical report."""
@@ -227,6 +277,32 @@ def build_professional_post_close_report(
     applicable_date = str(metadata.get("applicable_trading_date") or "")
     published_at = str(metadata.get("published_at") or "")
     industry_data = _industry_section(industries)
+    positive_observations = []
+    risk_observations = []
+    high_anomaly_observations = []
+    uncategorized_event_count = 0
+
+    for e in stock_events:
+        if not isinstance(e, dict):
+            continue
+        event_type = e.get("event_type")
+        policy = EVENT_POLICY_TABLE.get(event_type)
+        if not policy:
+            uncategorized_event_count += 1
+            continue
+        
+        ev = copy.deepcopy(e)
+        if ev.get("severity") not in SEVERITIES:
+            ev["severity"] = policy["severity"]
+        
+        if policy["category"] == "positive":
+            positive_observations.append(ev)
+        elif policy["category"] == "risk":
+            risk_observations.append(ev)
+        
+        if ev.get("severity") == "high":
+            high_anomaly_observations.append(ev)
+
     document = {
         "schema_version": 1,
         "kind": "absorb-professional-post-close-report",
@@ -276,22 +352,13 @@ def build_professional_post_close_report(
             "status": "available",
             "data_as_of": source_date,
             "data": {
+                "policy_version": EVENT_CLASSIFICATION_POLICY_VERSION,
                 "stock_events": copy.deepcopy(stock_events),
                 "etf_observations": copy.deepcopy(etfs),
-                "positive_observations": [
-                    e for e in stock_events
-                    if isinstance(e, dict) and e.get("event_type") in ("volume_surge", "new_high_20d")
-                ],
-                "risk_observations": [
-                    e for e in stock_events
-                    if isinstance(e, dict) and e.get("event_type") in ("volume_dry_up", "new_low_20d", "rsi_oversold", "rsi_overbought", "data_warning")
-                ],
-                "high_anomaly_observations": [
-                    e for e in stock_events
-                    if isinstance(e, dict) 
-                    and e.get("severity") == "high" 
-                    and e.get("event_type") in ("volume_surge", "new_high_20d", "volume_dry_up", "new_low_20d", "rsi_oversold", "rsi_overbought", "data_warning")
-                ],
+                "positive_observations": positive_observations,
+                "risk_observations": risk_observations,
+                "high_anomaly_observations": high_anomaly_observations,
+                "uncategorized_event_count": uncategorized_event_count,
             },
         },
         "quantitative_research": {
