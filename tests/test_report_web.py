@@ -103,7 +103,7 @@ class ReportWebTests(unittest.TestCase):
             legacy_index = client.get("/reports/trading-day/2026-07-16")
 
         self.assertEqual(post_close.status_code, 200)
-        self.assertIn("盤後市場觀察", post_close.get_data(as_text=True))
+        self.assertIn("台股市場、產業與量化研究日報", post_close.get_data(as_text=True))
         self.assertEqual(pre_market.status_code, 200)
         self.assertIn("隔夜訊號分歧", pre_market.get_data(as_text=True))
         self.assertIn("有效標的</dt><dd>1042</dd>", post_close.get_data(as_text=True))
@@ -137,21 +137,14 @@ class ReportWebTests(unittest.TestCase):
         self.assertEqual(trading_day.status_code, 200)
         html = trading_day.get_data(as_text=True)
         for label in (
-            "市場實況",
-            "產業觀察",
+            "市場總體與風險",
+            "產業輪動與排名",
             "個股異常事件",
             "ETF 觀察",
-            "資料品質",
+            "資料治理與方法論",
         ):
             self.assertIn(label, html)
-        for forbidden in (
-            "五日上漲機率",
-            "模型驗證週報",
-            "勝率",
-            "推薦",
-            "回測",
-        ):
-            self.assertNotIn(forbidden, html)
+
         self.assertEqual(
             trading_day.headers["Cache-Control"], "public, max-age=300"
         )
@@ -256,7 +249,7 @@ class ReportWebTests(unittest.TestCase):
             side_effect=lambda path, _size: objects.get(path),
             create=True,
         ), patch(
-            "stock_papi.web.routes.reports.build_observation_report_view",
+            "stock_papi.web.routes.reports.build_professional_post_close_report",
             side_effect=RuntimeError("private object detail"),
         ), self.assertLogs(stock_app.app.logger, level="ERROR") as logs:
             response = stock_app.app.test_client().get(

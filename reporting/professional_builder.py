@@ -208,6 +208,10 @@ def build_professional_post_close_report(
             "data": copy.deepcopy(dict(market)),
         },
         "capital_flows": {
+            "status": "available",
+            "data_as_of": source_date,
+            "data": copy.deepcopy(content.get("capital_flows")),
+        } if content.get("capital_flows") else {
             "status": "unavailable",
             "reason": "法人流向尚未納入目前的已驗證 Observation Artifact",
             "data": {},
@@ -223,9 +227,18 @@ def build_professional_post_close_report(
             "data": {
                 "stock_events": copy.deepcopy(stock_events),
                 "etf_observations": copy.deepcopy(etfs),
-                "positive_observations": [],
-                "risk_observations": [],
-                "high_anomaly_observations": copy.deepcopy(stock_events),
+                "positive_observations": [
+                    e for e in stock_events
+                    if isinstance(e, dict) and e.get("event_type") in ("volume_surge", "new_high_20d")
+                ],
+                "risk_observations": [
+                    e for e in stock_events
+                    if isinstance(e, dict) and e.get("event_type") in ("volume_dry_up", "new_low_20d", "rsi_oversold", "rsi_overbought", "data_warning")
+                ],
+                "high_anomaly_observations": [
+                    e for e in stock_events
+                    if isinstance(e, dict) and e.get("severity") == "high"
+                ],
             },
         },
         "quantitative_research": {
@@ -255,12 +268,11 @@ def build_professional_post_close_report(
             "status": "available",
             "data_as_of": source_date,
             "data": {
-                "positive": ["市場廣度回升且主要產業量能同步改善"],
-                "neutral": ["市場廣度維持區間，產業輪動缺乏一致方向"],
-                "negative": ["市場廣度續降且波動率擴張"],
+                "positive": [f for f in daily_focus if "強" in str(f) or "多" in str(f) or "上漲" in str(f)],
+                "neutral": [f for f in daily_focus if not ("強" in str(f) or "多" in str(f) or "上漲" in str(f) or "弱" in str(f) or "空" in str(f) or "下跌" in str(f))],
+                "negative": [f for f in daily_focus if "弱" in str(f) or "空" in str(f) or "下跌" in str(f)],
                 "watch_conditions": [
                     "站上 MA20 比例",
-                    "最強產業量能與內部廣度",
                     "20 日已實現波動率",
                 ],
             },
