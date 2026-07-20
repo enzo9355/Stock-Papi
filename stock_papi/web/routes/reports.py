@@ -194,7 +194,7 @@ def register_report_routes(
                         report=prof_report,
                     )
                 except (ValueError, TypeError) as exc:
-                    raise ReportWebError(f"Professional Report 綁定驗證失敗: {exc}") from exc
+                    raise ReportWebError("Professional Report 綁定驗證失敗") from exc
 
                 pdf_download_url = None
                 view_model = build_professional_report_view(
