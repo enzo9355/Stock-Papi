@@ -14,6 +14,7 @@ from reporting.exceptions import ReportWebError
 from reporting.web import find_report
 from reporting.professional_html import build_professional_report_view
 from stock_papi.services.report_view import build_observation_report_view
+from stock_papi.application import MAX_CANONICAL_REPORT_BYTES
 from werkzeug.exceptions import HTTPException
 
 
@@ -148,22 +149,25 @@ def register_report_routes(
                     raise ReportWebError("系統未提供 load_canonical_object")
 
                 try:
-                    raw_bytes = load_canonical_object(object_path, max_bytes=5_000_000)
-                except TypeError:
-                    raw_bytes = load_canonical_object(object_path)
+                    raw_bytes = load_canonical_object(
+                        object_path, max_bytes=MAX_CANONICAL_REPORT_BYTES
+                    )
                 except Exception as exc:
                     raise ReportWebError("無法讀取 Canonical Object") from exc
 
-                if not isinstance(raw_bytes, bytes) or len(raw_bytes) == 0 or len(raw_bytes) > 5_000_000:
+                if (
+                    not isinstance(raw_bytes, bytes)
+                    or len(raw_bytes) == 0
+                    or len(raw_bytes) > MAX_CANONICAL_REPORT_BYTES
+                ):
                     raise ReportWebError("Canonical Object 內容無效")
 
                 actual_sha256 = hashlib.sha256(raw_bytes).hexdigest()
                 if not hmac.compare_digest(actual_sha256, expected_sha):
                     raise ReportWebError("Canonical Object 雜湊比對失敗")
 
-                expected_object_1 = f"objects/canonical/{actual_sha256}.json"
-                expected_object_2 = f"objects/{actual_sha256}.json"
-                if object_path not in (expected_object_1, expected_object_2):
+                expected_object = f"objects/canonical/{actual_sha256}.json"
+                if object_path != expected_object:
                     raise ReportWebError("Canonical Object 路徑與雜湊不符")
 
                 try:

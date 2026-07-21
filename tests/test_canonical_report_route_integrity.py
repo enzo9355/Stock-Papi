@@ -26,6 +26,118 @@ class Calendar:
         return datetime.date(2026, 7, 16)
 
 
+def _replace_metadata_and_rebind_index(objects, mutate_metadata):
+    index_bytes = objects["reports/v2/index-TW.json"]
+    index_doc = json.loads(index_bytes.decode("utf-8"))
+
+    item = next(
+        i for i in index_doc["reports"] if i.get("report_type") == "post_close"
+    )
+    old_meta_path = f"reports/v2/{item['metadata']}"
+    meta_doc = json.loads(objects[old_meta_path].decode("utf-8"))
+
+    res = mutate_metadata(meta_doc)
+    if res is not None:
+        meta_doc = res
+
+    content_bytes = json.dumps(
+        meta_doc["content"],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    new_content_sha = hashlib.sha256(content_bytes).hexdigest()
+    meta_doc["content_sha256"] = new_content_sha
+    item["content_sha256"] = new_content_sha
+
+    meta_bytes = json.dumps(
+        meta_doc,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+    new_sha = hashlib.sha256(meta_bytes).hexdigest()
+
+    new_meta_path = f"reports/v2/metadata/{new_sha}.json"
+    if old_meta_path in objects and old_meta_path != new_meta_path:
+        del objects[old_meta_path]
+    objects[new_meta_path] = meta_bytes
+
+    item["metadata"] = f"metadata/{new_sha}.json"
+    item["metadata_sha256"] = new_sha
+
+    objects["reports/v2/index-TW.json"] = json.dumps(
+        index_doc,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+class CanonicalLoaderTests(unittest.TestCase):
+    def test_valid_relative_pointer(self):
+        sha64 = "a" * 64
+        with patch.object(stock_app, "_gcs_get_report_v2_object", return_value=b'{"test": 1}') as mock_gcs:
+            data = load_canonical_object(f"objects/canonical/{sha64}.json", max_bytes=5_000_000)
+            self.assertEqual(data, b'{"test": 1}')
+            mock_gcs.assert_called_once_with(f"reports/v2/objects/canonical/{sha64}.json", 5_000_000)
+
+    def test_pointer_containing_reports_v2_prefix_rejected(self):
+        sha64 = "a" * 64
+        with patch.object(stock_app, "_gcs_get_report_v2_object") as mock_gcs:
+            data = load_canonical_object(f"reports/v2/objects/canonical/{sha64}.json")
+            self.assertIsNone(data)
+            mock_gcs.assert_not_called()
+
+    def test_legacy_objects_sha_rejected(self):
+        sha64 = "a" * 64
+        with patch.object(stock_app, "_gcs_get_report_v2_object") as mock_gcs:
+            data = load_canonical_object(f"objects/{sha64}.json")
+            self.assertIsNone(data)
+            mock_gcs.assert_not_called()
+
+    def test_traversal_rejected(self):
+        sha64 = "a" * 64
+        with patch.object(stock_app, "_gcs_get_report_v2_object") as mock_gcs:
+            data = load_canonical_object(f"objects/canonical/../{sha64}.json")
+            self.assertIsNone(data)
+            mock_gcs.assert_not_called()
+
+    def test_invalid_sha_length_rejected(self):
+        sha63 = "a" * 63
+        sha65 = "a" * 65
+        with patch.object(stock_app, "_gcs_get_report_v2_object") as mock_gcs:
+            self.assertIsNone(load_canonical_object(f"objects/canonical/{sha63}.json"))
+            self.assertIsNone(load_canonical_object(f"objects/canonical/{sha65}.json"))
+            mock_gcs.assert_not_called()
+
+    def test_uppercase_sha_rejected(self):
+        uppercase_sha = "A" * 64
+        with patch.object(stock_app, "_gcs_get_report_v2_object") as mock_gcs:
+            data = load_canonical_object(f"objects/canonical/{uppercase_sha}.json")
+            self.assertIsNone(data)
+            mock_gcs.assert_not_called()
+
+    def test_valid_pointer_gcs_returns_none(self):
+        sha64 = "a" * 64
+        with patch.object(stock_app, "_gcs_get_report_v2_object", return_value=None):
+            self.assertIsNone(load_canonical_object(f"objects/canonical/{sha64}.json"))
+
+    def test_valid_pointer_gcs_returns_non_bytes(self):
+        sha64 = "a" * 64
+        with patch.object(stock_app, "_gcs_get_report_v2_object", return_value="not_bytes"):
+            self.assertIsNone(load_canonical_object(f"objects/canonical/{sha64}.json"))
+
+    def test_oversized_returns_none(self):
+        sha64 = "a" * 64
+        with patch.object(stock_app, "_gcs_get_report_v2_object", return_value=b"a" * 10):
+            self.assertIsNone(load_canonical_object(f"objects/canonical/{sha64}.json", max_bytes=5))
+
+
 class CanonicalReportRouteIntegrityTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -49,31 +161,19 @@ class CanonicalReportRouteIntegrityTests(unittest.TestCase):
 
     def _get_post_close(self, objects_dict=None, date_str="2026-07-15"):
         objs = objects_dict if objects_dict is not None else self.objects
+
+        def strict_gcs_loader(path, _size=None):
+            assert path.startswith("reports/v2/"), f"Path {path} does not start with reports/v2/"
+            return objs.get(path)
+
         with patch.object(
             stock_app,
             "_gcs_get_report_v2_object",
-            side_effect=lambda path, _size: objs.get(path) if path.startswith("reports/v2/") else objs.get(f"reports/v2/{path}"),
+            side_effect=strict_gcs_loader,
             create=True,
         ):
             client = stock_app.app.test_client()
             return client.get(f"/reports/{date_str}/post-close")
-
-    def test_load_canonical_object_unit(self):
-        with patch.object(stock_app, "_gcs_get_report_v2_object", return_value=b'{"test": 1}'):
-            data = load_canonical_object("reports/v2/objects/canonical/123.json", max_bytes=5_000_000)
-            self.assertEqual(data, b'{"test": 1}')
-
-        with patch.object(stock_app, "_gcs_get_report_v2_object", return_value=None):
-            self.assertIsNone(load_canonical_object("reports/v2/objects/canonical/123.json"))
-
-        with patch.object(stock_app, "_gcs_get_report_v2_object", return_value="not_bytes"):
-            self.assertIsNone(load_canonical_object("reports/v2/objects/canonical/123.json"))
-
-        with patch.object(stock_app, "_gcs_get_report_v2_object", return_value=b""):
-            self.assertIsNone(load_canonical_object("reports/v2/objects/canonical/123.json"))
-
-        with patch.object(stock_app, "_gcs_get_report_v2_object", return_value=b"a" * 10):
-            self.assertIsNone(load_canonical_object("reports/v2/objects/canonical/123.json", max_bytes=5))
 
     def test_valid_bytes_returns_200(self):
         response = self._get_post_close()
@@ -124,12 +224,14 @@ class CanonicalReportRouteIntegrityTests(unittest.TestCase):
 
     def test_path_sha_mismatch_returns_503(self):
         objs = dict(self.objects)
-        meta_key = next(k for k in objs if "metadata/" in k)
-        meta = json.loads(objs[meta_key].decode("utf-8"))
-        meta["professional_report"]["object"] = "objects/canonical/0000000000000000000000000000000000000000000000000000000000000000.json"
-        objs[meta_key] = json.dumps(meta).encode("utf-8")
         canonical_key = next(k for k in objs if "objects/canonical/" in k)
-        objs["reports/v2/objects/canonical/0000000000000000000000000000000000000000000000000000000000000000.json"] = objs[canonical_key]
+        fake_path = "objects/canonical/0000000000000000000000000000000000000000000000000000000000000000.json"
+
+        def mutate(meta):
+            meta["professional_report"]["object"] = fake_path
+
+        _replace_metadata_and_rebind_index(objs, mutate)
+        objs[f"reports/v2/{fake_path}"] = objs[canonical_key]
         response = self._get_post_close(objs)
         self.assertEqual(response.status_code, 503)
 
@@ -137,11 +239,12 @@ class CanonicalReportRouteIntegrityTests(unittest.TestCase):
         objs = dict(self.objects)
         bad_utf8 = b"\x80\x81\x82\x83"
         raw_sha = hashlib.sha256(bad_utf8).hexdigest()
-        meta_key = next(k for k in objs if "metadata/" in k)
-        meta = json.loads(objs[meta_key].decode("utf-8"))
-        meta["professional_report"]["object"] = f"objects/canonical/{raw_sha}.json"
-        meta["professional_report"]["sha256"] = raw_sha
-        objs[meta_key] = json.dumps(meta).encode("utf-8")
+
+        def mutate(meta):
+            meta["professional_report"]["object"] = f"objects/canonical/{raw_sha}.json"
+            meta["professional_report"]["sha256"] = raw_sha
+
+        _replace_metadata_and_rebind_index(objs, mutate)
         objs[f"reports/v2/objects/canonical/{raw_sha}.json"] = bad_utf8
         response = self._get_post_close(objs)
         self.assertEqual(response.status_code, 503)
@@ -150,11 +253,12 @@ class CanonicalReportRouteIntegrityTests(unittest.TestCase):
         objs = dict(self.objects)
         bad_json = b"{invalid json format"
         raw_sha = hashlib.sha256(bad_json).hexdigest()
-        meta_key = next(k for k in objs if "metadata/" in k)
-        meta = json.loads(objs[meta_key].decode("utf-8"))
-        meta["professional_report"]["object"] = f"objects/canonical/{raw_sha}.json"
-        meta["professional_report"]["sha256"] = raw_sha
-        objs[meta_key] = json.dumps(meta).encode("utf-8")
+
+        def mutate(meta):
+            meta["professional_report"]["object"] = f"objects/canonical/{raw_sha}.json"
+            meta["professional_report"]["sha256"] = raw_sha
+
+        _replace_metadata_and_rebind_index(objs, mutate)
         objs[f"reports/v2/objects/canonical/{raw_sha}.json"] = bad_json
         response = self._get_post_close(objs)
         self.assertEqual(response.status_code, 503)
@@ -163,11 +267,12 @@ class CanonicalReportRouteIntegrityTests(unittest.TestCase):
         objs = dict(self.objects)
         array_bytes = b"[1, 2, 3]"
         raw_sha = hashlib.sha256(array_bytes).hexdigest()
-        meta_key = next(k for k in objs if "metadata/" in k)
-        meta = json.loads(objs[meta_key].decode("utf-8"))
-        meta["professional_report"]["object"] = f"objects/canonical/{raw_sha}.json"
-        meta["professional_report"]["sha256"] = raw_sha
-        objs[meta_key] = json.dumps(meta).encode("utf-8")
+
+        def mutate(meta):
+            meta["professional_report"]["object"] = f"objects/canonical/{raw_sha}.json"
+            meta["professional_report"]["sha256"] = raw_sha
+
+        _replace_metadata_and_rebind_index(objs, mutate)
         objs[f"reports/v2/objects/canonical/{raw_sha}.json"] = array_bytes
         response = self._get_post_close(objs)
         self.assertEqual(response.status_code, 503)
@@ -176,11 +281,12 @@ class CanonicalReportRouteIntegrityTests(unittest.TestCase):
         objs = dict(self.objects)
         invalid_schema = json.dumps({"invalid_field": True}).encode("utf-8")
         raw_sha = hashlib.sha256(invalid_schema).hexdigest()
-        meta_key = next(k for k in objs if "metadata/" in k)
-        meta = json.loads(objs[meta_key].decode("utf-8"))
-        meta["professional_report"]["object"] = f"objects/canonical/{raw_sha}.json"
-        meta["professional_report"]["sha256"] = raw_sha
-        objs[meta_key] = json.dumps(meta).encode("utf-8")
+
+        def mutate(meta):
+            meta["professional_report"]["object"] = f"objects/canonical/{raw_sha}.json"
+            meta["professional_report"]["sha256"] = raw_sha
+
+        _replace_metadata_and_rebind_index(objs, mutate)
         objs[f"reports/v2/objects/canonical/{raw_sha}.json"] = invalid_schema
         response = self._get_post_close(objs)
         self.assertEqual(response.status_code, 503)
@@ -205,12 +311,12 @@ class CanonicalReportRouteIntegrityTests(unittest.TestCase):
         raw_bytes = json.dumps(canonical_doc, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
         raw_sha = hashlib.sha256(raw_bytes).hexdigest()
 
-        meta_key = next(k for k in objs if "metadata/" in k)
-        meta = json.loads(objs[meta_key].decode("utf-8"))
-        meta["professional_report"]["object"] = f"objects/canonical/{raw_sha}.json"
-        meta["professional_report"]["sha256"] = raw_sha
-        meta["professional_report"]["content_sha256"] = new_content_sha
-        objs[meta_key] = json.dumps(meta).encode("utf-8")
+        def mutate(meta):
+            meta["professional_report"]["object"] = f"objects/canonical/{raw_sha}.json"
+            meta["professional_report"]["sha256"] = raw_sha
+            meta["professional_report"]["content_sha256"] = new_content_sha
+
+        _replace_metadata_and_rebind_index(objs, mutate)
         objs[f"reports/v2/objects/canonical/{raw_sha}.json"] = raw_bytes
 
         response = self._get_post_close(objs)
@@ -227,12 +333,12 @@ class CanonicalReportRouteIntegrityTests(unittest.TestCase):
         raw_bytes = json.dumps(canonical_doc, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
         raw_sha = hashlib.sha256(raw_bytes).hexdigest()
 
-        meta_key = next(k for k in objs if "metadata/" in k)
-        meta = json.loads(objs[meta_key].decode("utf-8"))
-        meta["professional_report"]["object"] = f"objects/canonical/{raw_sha}.json"
-        meta["professional_report"]["sha256"] = raw_sha
-        meta["professional_report"]["content_sha256"] = new_content_sha
-        objs[meta_key] = json.dumps(meta).encode("utf-8")
+        def mutate(meta):
+            meta["professional_report"]["object"] = f"objects/canonical/{raw_sha}.json"
+            meta["professional_report"]["sha256"] = raw_sha
+            meta["professional_report"]["content_sha256"] = new_content_sha
+
+        _replace_metadata_and_rebind_index(objs, mutate)
         objs[f"reports/v2/objects/canonical/{raw_sha}.json"] = raw_bytes
 
         response = self._get_post_close(objs)
@@ -249,12 +355,12 @@ class CanonicalReportRouteIntegrityTests(unittest.TestCase):
         raw_bytes = json.dumps(canonical_doc, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
         raw_sha = hashlib.sha256(raw_bytes).hexdigest()
 
-        meta_key = next(k for k in objs if "metadata/" in k)
-        meta = json.loads(objs[meta_key].decode("utf-8"))
-        meta["professional_report"]["object"] = f"objects/canonical/{raw_sha}.json"
-        meta["professional_report"]["sha256"] = raw_sha
-        meta["professional_report"]["content_sha256"] = new_content_sha
-        objs[meta_key] = json.dumps(meta).encode("utf-8")
+        def mutate(meta):
+            meta["professional_report"]["object"] = f"objects/canonical/{raw_sha}.json"
+            meta["professional_report"]["sha256"] = raw_sha
+            meta["professional_report"]["content_sha256"] = new_content_sha
+
+        _replace_metadata_and_rebind_index(objs, mutate)
         objs[f"reports/v2/objects/canonical/{raw_sha}.json"] = raw_bytes
 
         response = self._get_post_close(objs)
@@ -262,28 +368,28 @@ class CanonicalReportRouteIntegrityTests(unittest.TestCase):
 
     def test_pointer_content_sha_mismatch_returns_503(self):
         objs = dict(self.objects)
-        meta_key = next(k for k in objs if "metadata/" in k)
-        meta = json.loads(objs[meta_key].decode("utf-8"))
-        meta["professional_report"]["content_sha256"] = "b" * 64
-        objs[meta_key] = json.dumps(meta).encode("utf-8")
+        def mutate(meta):
+            meta["professional_report"]["content_sha256"] = "b" * 64
+
+        _replace_metadata_and_rebind_index(objs, mutate)
         response = self._get_post_close(objs)
         self.assertEqual(response.status_code, 503)
 
     def test_generator_mismatch_returns_503(self):
         objs = dict(self.objects)
-        meta_key = next(k for k in objs if "metadata/" in k)
-        meta = json.loads(objs[meta_key].decode("utf-8"))
-        meta["professional_report"]["generator_version"] = "9.9.9"
-        objs[meta_key] = json.dumps(meta).encode("utf-8")
+        def mutate(meta):
+            meta["professional_report"]["generator_version"] = "9.9.9"
+
+        _replace_metadata_and_rebind_index(objs, mutate)
         response = self._get_post_close(objs)
         self.assertEqual(response.status_code, 503)
 
     def test_code_sha_mismatch_returns_503(self):
         objs = dict(self.objects)
-        meta_key = next(k for k in objs if "metadata/" in k)
-        meta = json.loads(objs[meta_key].decode("utf-8"))
-        meta["professional_report"]["code_commit_sha"] = "c" * 40
-        objs[meta_key] = json.dumps(meta).encode("utf-8")
+        def mutate(meta):
+            meta["professional_report"]["code_commit_sha"] = "c" * 40
+
+        _replace_metadata_and_rebind_index(objs, mutate)
         response = self._get_post_close(objs)
         self.assertEqual(response.status_code, 503)
 
@@ -298,12 +404,12 @@ class CanonicalReportRouteIntegrityTests(unittest.TestCase):
         raw_bytes = json.dumps(canonical_doc, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
         raw_sha = hashlib.sha256(raw_bytes).hexdigest()
 
-        meta_key = next(k for k in objs if "metadata/" in k)
-        meta = json.loads(objs[meta_key].decode("utf-8"))
-        meta["professional_report"]["object"] = f"objects/canonical/{raw_sha}.json"
-        meta["professional_report"]["sha256"] = raw_sha
-        meta["professional_report"]["content_sha256"] = new_content_sha
-        objs[meta_key] = json.dumps(meta).encode("utf-8")
+        def mutate(meta):
+            meta["professional_report"]["object"] = f"objects/canonical/{raw_sha}.json"
+            meta["professional_report"]["sha256"] = raw_sha
+            meta["professional_report"]["content_sha256"] = new_content_sha
+
+        _replace_metadata_and_rebind_index(objs, mutate)
         objs[f"reports/v2/objects/canonical/{raw_sha}.json"] = raw_bytes
 
         response = self._get_post_close(objs)

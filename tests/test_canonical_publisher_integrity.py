@@ -113,8 +113,22 @@ class CanonicalPublisherIntegrityTests(unittest.TestCase):
             self.assertEqual(len(list(canonical_dir.glob("*.json"))), 0)
 
     def test_fails_closed_on_corrupted_content_sha(self):
+        import dataclasses
         report_doc = self._base_report_doc()
-        report_doc["identity"]["content_sha256"] = "a" * 64
+        professional_report = ProfessionalPostCloseReport.from_document(report_doc)
+        bad_identity = dataclasses.replace(professional_report.identity, content_sha256="a" * 64)
+        professional_report = dataclasses.replace(professional_report, identity=bad_identity)
+        metadata_doc = self._base_metadata_doc(report_doc)
+
+        with self.assertRaises(ReportPublishError):
+            publish_report_v2(
+                root=self.root,
+                metadata=metadata_doc,
+                professional_report=professional_report,
+            )
+
+    def test_rejects_dict_professional_report(self):
+        report_doc = self._base_report_doc()
         metadata_doc = self._base_metadata_doc(report_doc)
 
         with self.assertRaises(ReportPublishError):

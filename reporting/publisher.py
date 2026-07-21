@@ -71,7 +71,7 @@ def publish_report_v2(
     pdf_path: Path | None = None,
     page_count: int | None = None,
     config: ReportConfig | None = None,
-    professional_report: Any = None,
+    professional_report: ProfessionalPostCloseReport | None = None,
 ) -> Path:
     """發布 v2 post-close、pre-market 或 weekly report；latest 永遠最後寫。"""
     settings = config or ReportConfig(root=Path(root))
@@ -114,13 +114,10 @@ def publish_report_v2(
     # 3. Process Canonical Report (ProfessionalPostCloseReport)
     if professional_report is not None:
         try:
-            if isinstance(professional_report, ProfessionalPostCloseReport):
-                canonical_obj = professional_report
-            elif isinstance(professional_report, dict):
-                canonical_obj = ProfessionalPostCloseReport.from_document(professional_report)
-            else:
-                raise ValueError("professional_report must be ProfessionalPostCloseReport or dict")
+            if not isinstance(professional_report, ProfessionalPostCloseReport):
+                raise TypeError("professional_report must be ProfessionalPostCloseReport")
 
+            canonical_obj = professional_report
             validate_professional_report_binding(metadata=schema, report=canonical_obj)
             canonical_doc = canonical_obj.to_document()
             recalc_sha = compute_content_sha256(canonical_doc)
@@ -130,8 +127,10 @@ def publish_report_v2(
             if not 0 < len(canonical_bytes) <= 5 * 1024 * 1024:
                 raise ReportPublishError("canonical report object size invalid")
             canonical_sha = hashlib.sha256(canonical_bytes).hexdigest()
+        except ReportPublishError:
+            raise
         except Exception as exc:
-            raise ReportPublishError(f"failed to process canonical report: {exc}") from exc
+            raise ReportPublishError("failed to process canonical report") from exc
 
         canonical_relative = f"objects/canonical/{canonical_sha}.json"
         canonical_path = publish / canonical_relative
@@ -152,10 +151,14 @@ def publish_report_v2(
                 readback_doc = json.loads(readback_bytes.decode("utf-8"))
                 readback_obj = ProfessionalPostCloseReport.from_document(readback_doc)
                 validate_professional_report_binding(metadata=schema, report=readback_obj)
+            except ReportPublishError:
+                if newly_created_canonical_path and newly_created_canonical_path.exists():
+                    newly_created_canonical_path.unlink(missing_ok=True)
+                raise
             except Exception as exc:
                 if newly_created_canonical_path and newly_created_canonical_path.exists():
                     newly_created_canonical_path.unlink(missing_ok=True)
-                raise ReportPublishError(f"failed to write/verify canonical object: {exc}") from exc
+                raise ReportPublishError("failed to write/verify canonical object") from exc
 
         # 5. Update metadata pointer
         document["professional_report"] = {
@@ -261,12 +264,18 @@ def publish_report_v2(
             readback_meta = metadata_path.read_bytes()
             if hashlib.sha256(readback_meta).hexdigest() != metadata_sha:
                 raise ReportPublishError("metadata read-back SHA256 mismatch")
+        except ReportPublishError:
+            if newly_created_metadata_path and newly_created_metadata_path.exists():
+                newly_created_metadata_path.unlink(missing_ok=True)
+            if newly_created_canonical_path and newly_created_canonical_path.exists():
+                newly_created_canonical_path.unlink(missing_ok=True)
+            raise
         except Exception as exc:
             if newly_created_metadata_path and newly_created_metadata_path.exists():
                 newly_created_metadata_path.unlink(missing_ok=True)
             if newly_created_canonical_path and newly_created_canonical_path.exists():
                 newly_created_canonical_path.unlink(missing_ok=True)
-            raise ReportPublishError(f"failed to write/verify metadata: {exc}") from exc
+            raise ReportPublishError("failed to write/verify metadata") from exc
 
     if not existing:
         reports.append(entry)

@@ -430,12 +430,17 @@ def _gcs_get_report_v2_object(object_name, max_bytes):
     return _gcs_get_allowed_object(object_name, max_bytes, "reports/v2/")
 
 
-def load_canonical_object(object_path, max_bytes=5_000_000):
-    if not isinstance(object_path, str) or not object_path:
+MAX_CANONICAL_REPORT_BYTES = 5_000_000
+_CANONICAL_OBJECT_PATH_RE = re.compile(r"^objects/canonical/[0-9a-f]{64}\.json$")
+
+
+def load_canonical_object(object_path, max_bytes=MAX_CANONICAL_REPORT_BYTES):
+    if not isinstance(object_path, str) or not _CANONICAL_OBJECT_PATH_RE.match(object_path):
         return None
     if type(max_bytes) is not int or max_bytes < 1:
         return None
-    data = _gcs_get_report_v2_object(object_path, max_bytes)
+    full_object_name = f"reports/v2/{object_path}"
+    data = _gcs_get_report_v2_object(full_object_name, max_bytes)
     if not isinstance(data, bytes) or len(data) == 0 or len(data) > max_bytes:
         return None
     return data
