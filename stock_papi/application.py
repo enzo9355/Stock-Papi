@@ -16,6 +16,7 @@ import hmac
 import re
 
 from market_insights import build_industries, build_supply_chains
+from reporting.config import MAX_CANONICAL_REPORT_BYTES
 
 # Compatibility export: legacy tests still patch app.render_template.
 from flask import render_template, request
@@ -430,14 +431,17 @@ def _gcs_get_report_v2_object(object_name, max_bytes):
     return _gcs_get_allowed_object(object_name, max_bytes, "reports/v2/")
 
 
-MAX_CANONICAL_REPORT_BYTES = 5_000_000
 _CANONICAL_OBJECT_PATH_RE = re.compile(r"^objects/canonical/[0-9a-f]{64}\.json$")
 
 
 def load_canonical_object(object_path, max_bytes=MAX_CANONICAL_REPORT_BYTES):
-    if not isinstance(object_path, str) or not _CANONICAL_OBJECT_PATH_RE.match(object_path):
+    if (
+        isinstance(max_bytes, bool)
+        or not isinstance(max_bytes, int)
+        or not (1 <= max_bytes <= MAX_CANONICAL_REPORT_BYTES)
+    ):
         return None
-    if type(max_bytes) is not int or max_bytes < 1:
+    if not isinstance(object_path, str) or not _CANONICAL_OBJECT_PATH_RE.match(object_path):
         return None
     full_object_name = f"reports/v2/{object_path}"
     data = _gcs_get_report_v2_object(full_object_name, max_bytes)

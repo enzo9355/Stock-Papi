@@ -14,7 +14,7 @@ from reporting.exceptions import ReportWebError
 from reporting.web import find_report
 from reporting.professional_html import build_professional_report_view
 from stock_papi.services.report_view import build_observation_report_view
-from stock_papi.application import MAX_CANONICAL_REPORT_BYTES
+from reporting.config import MAX_CANONICAL_REPORT_BYTES
 from werkzeug.exceptions import HTTPException
 
 

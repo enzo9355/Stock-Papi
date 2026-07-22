@@ -79,6 +79,25 @@ def _replace_metadata_and_rebind_index(objects, mutate_metadata):
 
 
 class CanonicalLoaderTests(unittest.TestCase):
+    def test_symbol_identity_across_modules(self):
+        import reporting.config
+        import reporting.publisher
+        import stock_papi.application
+        import stock_papi.web.routes.reports
+
+        self.assertIs(
+            reporting.publisher.MAX_CANONICAL_REPORT_BYTES,
+            stock_papi.web.routes.reports.MAX_CANONICAL_REPORT_BYTES,
+        )
+        self.assertIs(
+            stock_papi.web.routes.reports.MAX_CANONICAL_REPORT_BYTES,
+            stock_papi.application.MAX_CANONICAL_REPORT_BYTES,
+        )
+        self.assertIs(
+            stock_papi.application.MAX_CANONICAL_REPORT_BYTES,
+            reporting.config.MAX_CANONICAL_REPORT_BYTES,
+        )
+
     def test_valid_relative_pointer(self):
         sha64 = "a" * 64
         with patch.object(stock_app, "_gcs_get_report_v2_object", return_value=b'{"test": 1}') as mock_gcs:
@@ -136,6 +155,51 @@ class CanonicalLoaderTests(unittest.TestCase):
         sha64 = "a" * 64
         with patch.object(stock_app, "_gcs_get_report_v2_object", return_value=b"a" * 10):
             self.assertIsNone(load_canonical_object(f"objects/canonical/{sha64}.json", max_bytes=5))
+
+    def test_boundary_payload_exact_max_bytes_returns_bytes(self):
+        from reporting.config import MAX_CANONICAL_REPORT_BYTES
+
+        sha64 = "a" * 64
+        payload = b"a" * MAX_CANONICAL_REPORT_BYTES
+        with patch.object(stock_app, "_gcs_get_report_v2_object", return_value=payload) as mock_gcs:
+            data = load_canonical_object(f"objects/canonical/{sha64}.json")
+            self.assertEqual(data, payload)
+            mock_gcs.assert_called_once_with(
+                f"reports/v2/objects/canonical/{sha64}.json", MAX_CANONICAL_REPORT_BYTES
+            )
+
+    def test_boundary_payload_exceeding_max_bytes_returns_none(self):
+        from reporting.config import MAX_CANONICAL_REPORT_BYTES
+
+        sha64 = "a" * 64
+        payload = b"a" * (MAX_CANONICAL_REPORT_BYTES + 1)
+        with patch.object(stock_app, "_gcs_get_report_v2_object", return_value=payload) as mock_gcs:
+            data = load_canonical_object(f"objects/canonical/{sha64}.json")
+            self.assertIsNone(data)
+            mock_gcs.assert_called_once_with(
+                f"reports/v2/objects/canonical/{sha64}.json", MAX_CANONICAL_REPORT_BYTES
+            )
+
+    def test_max_bytes_override_exceeding_constant_returns_none_without_gcs(self):
+        from reporting.config import MAX_CANONICAL_REPORT_BYTES
+
+        sha64 = "a" * 64
+        with patch.object(stock_app, "_gcs_get_report_v2_object") as mock_gcs:
+            data = load_canonical_object(
+                f"objects/canonical/{sha64}.json",
+                max_bytes=MAX_CANONICAL_REPORT_BYTES + 1,
+            )
+            self.assertIsNone(data)
+            mock_gcs.assert_not_called()
+
+    def test_max_bytes_boolean_or_non_int_returns_none_without_gcs(self):
+        sha64 = "a" * 64
+        with patch.object(stock_app, "_gcs_get_report_v2_object") as mock_gcs:
+            self.assertIsNone(load_canonical_object(f"objects/canonical/{sha64}.json", max_bytes=True))
+            self.assertIsNone(load_canonical_object(f"objects/canonical/{sha64}.json", max_bytes=False))
+            self.assertIsNone(load_canonical_object(f"objects/canonical/{sha64}.json", max_bytes="5000000"))
+            self.assertIsNone(load_canonical_object(f"objects/canonical/{sha64}.json", max_bytes=5000000.0))
+            mock_gcs.assert_not_called()
 
 
 class CanonicalReportRouteIntegrityTests(unittest.TestCase):

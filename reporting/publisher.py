@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from . import REPORT_GENERATOR_VERSION, REPORT_SCHEMA_VERSION, git_commit_sha
-from .config import ReportConfig
+from .config import MAX_CANONICAL_REPORT_BYTES, ReportConfig
 from .exceptions import ReportPublishError
 from .public_report import build_public_report
 from .professional_binding import validate_professional_report_binding
@@ -124,7 +124,7 @@ def publish_report_v2(
             if canonical_doc["identity"]["content_sha256"] != recalc_sha:
                 raise ValueError("canonical report content_sha256 mismatch")
             canonical_bytes = _json_bytes(canonical_doc)
-            if not 0 < len(canonical_bytes) <= 5 * 1024 * 1024:
+            if not 0 < len(canonical_bytes) <= MAX_CANONICAL_REPORT_BYTES:
                 raise ReportPublishError("canonical report object size invalid")
             canonical_sha = hashlib.sha256(canonical_bytes).hexdigest()
         except ReportPublishError:
@@ -144,7 +144,7 @@ def publish_report_v2(
                 _write_atomic(canonical_path, canonical_bytes)
                 newly_created_canonical_path = canonical_path
                 readback_bytes = canonical_path.read_bytes()
-                if not 0 < len(readback_bytes) <= 5 * 1024 * 1024:
+                if not 0 < len(readback_bytes) <= MAX_CANONICAL_REPORT_BYTES:
                     raise ReportPublishError("canonical read-back size invalid")
                 if hashlib.sha256(readback_bytes).hexdigest() != canonical_sha:
                     raise ReportPublishError("canonical object read-back verification failed")
