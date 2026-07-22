@@ -1,89 +1,133 @@
-# -*- coding: utf-8 -*-
-"""Tests for immutable RegressionInputDataset publisher."""
+"""Failure-injection tests for the immutable regression input publisher."""
 
+import copy
 import hashlib
 import json
-import os
-import shutil
+from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest import mock
+
+from reporting.regression_input_publisher import (
+    _validate_readback,
+    publish_regression_input_dataset,
+)
+from reporting.regression_input_schema import serialize_regression_input_dataset
+from tests.regression_fixtures import make_input_document, trading_calendar
 
 
 class TestRegressionInputPublisher(unittest.TestCase):
-
     def setUp(self):
-        self.test_dir = tempfile.mkdtemp()
-        self.publish_dir = os.path.join(self.test_dir, "publish")
-        os.makedirs(os.path.join(self.publish_dir, "objects", "regression-input"), exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.calendar = trading_calendar()
+        self.document = make_input_document(calendar=self.calendar)
+        self.payload = serialize_regression_input_dataset(self.document)
+        self.object_sha = hashlib.sha256(self.payload).hexdigest()
+        self.object_path = self.root / "objects" / "regression-input" / f"{self.object_sha}.json"
 
     def tearDown(self):
-        shutil.rmtree(self.test_dir, ignore_errors=True)
+        self.temp.cleanup()
 
-    def test_publishes_input_dataset_atomically_with_readback(self):
-        from reporting.regression_input_publisher import publish_regression_input_dataset
-        from reporting.regression_input_schema import compute_canonical_rows_sha256, compute_regression_input_dataset_content_sha256
+    def publish(self):
+        return publish_regression_input_dataset(
+            self.document,
+            publish_root=self.root,
+            trading_calendar=self.calendar,
+        )
 
-        rows = [
-            {
-                "feature_session": "2025-07-10",
-                "label_end_session": "2025-07-17",
-                "taiex_close_t": 22450.15,
-                "taiex_close_t_plus_5": 22810.40,
-                "five_session_forward_return": 0.016047,
-                "factor_values": {"volume_surge_ratio": 1.25}
-            }
-        ]
-        rows_sha = compute_canonical_rows_sha256(rows)
+    def test_publish_and_identical_reuse_do_not_rewrite_immutable_object(self):
+        pointer = self.publish()
+        self.assertEqual(pointer["sha256"], self.object_sha)
+        self.assertEqual(self.object_path.read_bytes(), self.payload)
 
-        doc = {
-            "schema_version": 1,
-            "kind": "absorb-regression-input-dataset",
-            "identity": {
-                "dataset_id": "TW-20260717-input-dataset-v1",
-                "market": "TW",
-                "analysis_scope": "market_level_daily",
-                "source_market_date": "2026-07-17",
-                "first_feature_session": "2025-07-10",
-                "last_feature_session": "2026-07-10",
-                "first_label_end_session": "2025-07-17",
-                "last_label_end_session": "2026-07-17",
-                "first_source_session": "2025-06-10",
-                "last_source_session": "2026-07-17",
-                "lookback_start_session": "2025-06-10",
-                "source_object_count": 1,
-                "aggregate_manifest_object": "quant/v1/manifests/TW-20260717T103000Z-a1b2c3d4e5f6.json",
-                "aggregate_manifest_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                "aggregate_manifest_schema_version": 1,
-                "row_count": 1,
-                "calendar_id": "TWSE_TRADING_CALENDAR",
-                "calendar_version": "2026.1",
-                "calendar_sha256": "c1a2b3e4f5d6a789901234567890abcdefc1a2b3e4f5d6a789901234567890ab",
-                "canonical_rows_sha256": rows_sha,
-                "code_commit_sha": "da25d594d3b76865da22b891285ac0c85e710d86",
-                "content_sha256": ""
-            },
-            "source_objects": [],
-            "factor_definitions": [],
-            "preprocessing_policy": {
-                "factor_value_stage": "raw",
-                "missing_value_policy": "listwise_deletion",
-                "winsorization_policy": "1st_99th_percentile_linear_interpolation",
-                "standardization_policy": "z_score_sample_std_ddof_1"
-            },
-            "rows": rows
-        }
-        content_sha = compute_regression_input_dataset_content_sha256(doc)
-        doc["identity"]["content_sha256"] = content_sha
+        with mock.patch("reporting.regression_input_publisher._write_atomic") as writer:
+            reused = self.publish()
+        writer.assert_not_called()
+        self.assertEqual(reused, pointer)
 
-        with patch("reporting.regression_input_publisher.PUBLISH_ROOT", self.publish_dir):
-            ptr = publish_regression_input_dataset(doc)
-            self.assertIsNotNone(ptr)
-            self.assertEqual(ptr["schema_version"], 1)
-            self.assertEqual(ptr["row_count"], 1)
-            self.assertTrue(ptr["object"].startswith("objects/regression-input/"))
-            written_file = os.path.join(self.publish_dir, ptr["object"])
-            self.assertTrue(os.path.exists(written_file))
+    def test_immutable_conflict_fails_without_deleting_existing_object(self):
+        self.object_path.parent.mkdir(parents=True)
+        self.object_path.write_bytes(b"pre-existing different bytes")
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            self.publish()
+        self.assertEqual(self.object_path.read_bytes(), b"pre-existing different bytes")
+
+    def test_oversized_write_replace_and_readback_failures_clean_new_objects(self):
+        with mock.patch("reporting.regression_input_publisher.MAX_REGRESSION_INPUT_DATASET_BYTES", 10):
+            with self.assertRaisesRegex(ValueError, "size"):
+                self.publish()
+
+        with mock.patch("reporting.regression_input_publisher._write_atomic", side_effect=OSError("write")):
+            with self.assertRaisesRegex(RuntimeError, "write"):
+                self.publish()
+        self.assertFalse(self.object_path.exists())
+
+        with mock.patch("reporting.regression_input_publisher.os.replace", side_effect=OSError("replace")):
+            with self.assertRaisesRegex(RuntimeError, "replace"):
+                self.publish()
+        self.assertFalse(self.object_path.exists())
+        self.assertFalse(any(self.root.rglob("*.tmp")))
+
+        with mock.patch.object(Path, "read_bytes", side_effect=OSError("read-back")):
+            with self.assertRaisesRegex(RuntimeError, "read-back"):
+                self.publish()
+        self.assertFalse(self.object_path.exists())
+
+    def test_readback_verifier_rejects_size_sha_utf8_json_and_schema_failures(self):
+        invalid_cases = (
+            (self.payload + b"x", len(self.payload), hashlib.sha256(self.payload + b"x").hexdigest(), "size"),
+            (self.payload, len(self.payload), "0" * 64, "SHA256"),
+            (b"\xff", 1, hashlib.sha256(b"\xff").hexdigest(), "UTF-8"),
+            (b"{", 1, hashlib.sha256(b"{").hexdigest(), "JSON"),
+            (b"[]", 2, hashlib.sha256(b"[]").hexdigest(), "schema"),
+        )
+        for payload, size, sha, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    _validate_readback(
+                        payload,
+                        expected_size=size,
+                        expected_sha256=sha,
+                        trading_calendar=self.calendar,
+                    )
+
+    def test_readback_verifier_recomputes_content_and_rows_hashes(self):
+        for field in ("content", "rows"):
+            with self.subTest(field=field):
+                document = copy.deepcopy(self.document)
+                if field == "content":
+                    document["identity"]["dataset_id"] += "-tampered"
+                else:
+                    document["rows"][0]["factor_values"]["volume_surge_ratio"] += 0.1
+                payload = json.dumps(
+                    document,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                with self.assertRaisesRegex(ValueError, "content_sha256|canonical_rows_sha256"):
+                    _validate_readback(
+                        payload,
+                        expected_size=len(payload),
+                        expected_sha256=hashlib.sha256(payload).hexdigest(),
+                        trading_calendar=self.calendar,
+                    )
+
+    def test_cleanup_failure_is_reported_and_existing_objects_are_never_deleted(self):
+        original_unlink = Path.unlink
+
+        def fail_object_cleanup(path, *args, **kwargs):
+            if path.suffix == ".json":
+                raise OSError("cleanup")
+            return original_unlink(path, *args, **kwargs)
+
+        with mock.patch(
+            "reporting.regression_input_publisher._validate_readback",
+            side_effect=ValueError("schema mismatch"),
+        ), mock.patch.object(Path, "unlink", fail_object_cleanup):
+            with self.assertRaisesRegex(RuntimeError, "cleanup"):
+                self.publish()
 
 
 if __name__ == "__main__":

@@ -10,7 +10,10 @@ from . import REPORT_GENERATOR_VERSION, REPORT_SCHEMA_VERSION, git_commit_sha
 from .config import MAX_CANONICAL_REPORT_BYTES, ReportConfig
 from .exceptions import ReportPublishError
 from .public_report import build_public_report
-from .professional_binding import validate_professional_report_binding
+from .professional_binding import (
+    validate_professional_report_binding,
+    validate_regression_research_binding,
+)
 from .professional_schema import ProfessionalPostCloseReport, compute_content_sha256
 from .regression_schema import (
     MAX_REGRESSION_ARTIFACT_BYTES,
@@ -49,6 +52,9 @@ def _write_atomic(path: Path, content: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
+_RESTORE_WRITE_ATOMIC = _write_atomic
+
+
 def _local_mirror_path(archive: Path, market: str, report_date: datetime.date) -> Path:
     return Path(archive) / f"absorb-{market.lower()}-industry-daily-{report_date.isoformat()}.pdf"
 
@@ -69,7 +75,7 @@ def _restore_atomic(path: Path, previous: bytes | None) -> None:
         _write_atomic(path, previous)
 
 
-def publish_report_v2(
+def _publish_report_v2_impl(
     root: Path,
     metadata: dict,
     *,
@@ -78,6 +84,7 @@ def publish_report_v2(
     config: ReportConfig | None = None,
     professional_report: ProfessionalPostCloseReport | None = None,
     regression_artifact: dict | Any | None = None,
+    _transaction_created: list[Path] | None = None,
 ) -> Path:
     """發布 v2 post-close、pre-market 或 weekly report；latest 永遠最後寫。"""
     settings = config or ReportConfig(root=Path(root))
@@ -95,6 +102,8 @@ def publish_report_v2(
         raise ValueError("only post_close can include professional_report")
     if schema.report_type != "post_close" and regression_artifact is not None:
         raise ValueError("only post_close can include regression_artifact")
+    if regression_artifact is not None and professional_report is None:
+        raise ValueError("regression_artifact requires professional_report binding")
 
     # 2. 處理 PDF
     pdf_bytes = None
@@ -119,6 +128,7 @@ def publish_report_v2(
     newly_created_canonical_path: Path | None = None
     newly_created_regression_path: Path | None = None
     newly_created_metadata_path: Path | None = None
+    reg_obj: RegressionResearchArtifact | None = None
 
     # 2b. Process Regression Artifact (if provided)
     if regression_artifact is not None:
@@ -149,6 +159,8 @@ def publish_report_v2(
                 raise ReportPublishError("immutable regression object conflict")
         else:
             try:
+                if _transaction_created is not None:
+                    _transaction_created.append(reg_path)
                 _write_atomic(reg_path, reg_bytes)
                 newly_created_regression_path = reg_path
                 readback_bytes = reg_path.read_bytes()
@@ -157,7 +169,9 @@ def publish_report_v2(
                 if hashlib.sha256(readback_bytes).hexdigest() != reg_sha:
                     raise ReportPublishError("regression object read-back verification failed")
                 readback_doc = json.loads(readback_bytes.decode("utf-8"))
-                RegressionResearchArtifact.from_document(readback_doc)
+                readback_obj = RegressionResearchArtifact.from_document(readback_doc)
+                if readback_obj.identity.content_sha256 != reg_obj.identity.content_sha256:
+                    raise ReportPublishError("regression content_sha256 read-back mismatch")
             except ReportPublishError:
                 if newly_created_regression_path and newly_created_regression_path.exists():
                     newly_created_regression_path.unlink(missing_ok=True)
@@ -189,9 +203,39 @@ def publish_report_v2(
             if not isinstance(professional_report, ProfessionalPostCloseReport):
                 raise TypeError("professional_report must be ProfessionalPostCloseReport")
 
-            canonical_obj = professional_report
+            canonical_doc = professional_report.to_document()
+            if reg_obj is not None:
+                sample_count = reg_obj.regression_spec.sample_count
+                canonical_doc["quantitative_research"] = {
+                    "status": "available",
+                    "data_as_of": reg_obj.identity.source_market_date,
+                    "data": {
+                        "regression_reference": {
+                            "object_sha256": document["regression_research"]["sha256"],
+                            "content_sha256": reg_obj.identity.content_sha256,
+                            "summary_status": (
+                                "available_with_limited_sample_warning"
+                                if sample_count < 60
+                                else "available"
+                            ),
+                        }
+                    },
+                }
+                canonical_doc["identity"]["content_sha256"] = compute_content_sha256(
+                    canonical_doc
+                )
+                canonical_obj = ProfessionalPostCloseReport.from_document(canonical_doc)
+            else:
+                canonical_obj = professional_report
             validate_professional_report_binding(metadata=schema, report=canonical_obj)
             canonical_doc = canonical_obj.to_document()
+            if reg_obj is not None:
+                validate_regression_research_binding(
+                    metadata=schema,
+                    professional_report=canonical_obj,
+                    pointer=document["regression_research"],
+                    regression_artifact=reg_obj,
+                )
             recalc_sha = compute_content_sha256(canonical_doc)
             if canonical_doc["identity"]["content_sha256"] != recalc_sha:
                 raise ValueError("canonical report content_sha256 mismatch")
@@ -219,6 +263,8 @@ def publish_report_v2(
                 raise ReportPublishError("immutable canonical object conflict")
         else:
             try:
+                if _transaction_created is not None:
+                    _transaction_created.append(canonical_path)
                 _write_atomic(canonical_path, canonical_bytes)
                 newly_created_canonical_path = canonical_path
                 readback_bytes = canonical_path.read_bytes()
@@ -344,6 +390,8 @@ def publish_report_v2(
         raise ReportPublishError("immutable report v2 metadata conflict")
     if not metadata_path.exists():
         try:
+            if _transaction_created is not None:
+                _transaction_created.append(metadata_path)
             _write_atomic(metadata_path, metadata_bytes)
             newly_created_metadata_path = metadata_path
             readback_meta = metadata_path.read_bytes()
@@ -400,6 +448,59 @@ def publish_report_v2(
         _restore_atomic(index_path, previous_index)
         raise
     return latest_path
+
+
+def publish_report_v2(
+    root: Path,
+    metadata: dict,
+    *,
+    pdf_path: Path | None = None,
+    page_count: int | None = None,
+    config: ReportConfig | None = None,
+    professional_report: ProfessionalPostCloseReport | None = None,
+    regression_artifact: dict | Any | None = None,
+) -> Path:
+    """Run report-v2 publication inside one rollback boundary."""
+    schema = ReportMetadataV2.from_document(metadata)
+    publish = Path(root) / "publish" / "reports" / "v2"
+    index_path = publish / "index-TW.json"
+    latest_path = publish / f"latest-TW-{schema.report_type}.json"
+    previous_index = index_path.read_bytes() if index_path.exists() else None
+    previous_latest = latest_path.read_bytes() if latest_path.exists() else None
+    newly_created_paths: list[Path] = []
+
+    try:
+        return _publish_report_v2_impl(
+            root,
+            metadata,
+            pdf_path=pdf_path,
+            page_count=page_count,
+            config=config,
+            professional_report=professional_report,
+            regression_artifact=regression_artifact,
+            _transaction_created=newly_created_paths,
+        )
+    except Exception as original:
+        rollback_errors = []
+        for path in reversed(newly_created_paths):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                rollback_errors.append(exc)
+        for path, previous in (
+            (index_path, previous_index),
+            (latest_path, previous_latest),
+        ):
+            try:
+                if previous is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    _RESTORE_WRITE_ATOMIC(path, previous)
+            except OSError as exc:
+                rollback_errors.append(exc)
+        if rollback_errors:
+            raise ReportPublishError("report v2 rollback failed") from original
+        raise
 
 
 def _write_local_mirror(
