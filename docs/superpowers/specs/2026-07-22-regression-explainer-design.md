@@ -21,25 +21,31 @@ Task C introduces the **Regression Explainer & Research Presentation Layer**. Th
 ## 2. Goals
 
 1. **Immutable Research Artifact**: Define a content-addressed `RegressionResearchArtifact` schema (`schema_version = 1`, `kind = "absorb-regression-research-artifact"`) stored at `objects/regression/<object_sha256>.json` to store deterministic OLS regression estimates, HAC robust covariance diagnostics, and statistical summaries.
-2. **Self-Contained Input Dataset Lineage**: Define `RegressionInputDataset` (`schema_version = 1`, `kind = "absorb-regression-input-dataset"`) stored at `objects/regression-input/<object_sha256>.json` (`MAX_REGRESSION_INPUT_DATASET_BYTES = 5_000_000`), embedding complete 252-row observation matrix data and binding `input_dataset_object`, `input_dataset_sha256`, `input_dataset_content_sha256`, and `input_dataset_rows_sha256` to the regression artifact.
-3. **Strict Point-in-Time & Session Calendar Lineage**: Enforce explicit session boundaries (`first_feature_session`, `last_feature_session`, `first_label_end_session`, `last_label_end_session`, `label_horizon_sessions = 5`) where `feature_session_t < label_end_session_t <= source_market_date`, calculated via trading calendar to prevent forward look-ahead label leakage.
-4. **Market Index Dependent Variable**: Define dependent variable as `five_session_forward_return` ($Y_t = \frac{P_{t+5}}{P_t} - 1$, where $P_t$ is official TAIEX closing price on session $t$, and $P_{t+5}$ is official TAIEX closing price 5 trading sessions ahead).
-5. **Exact Factor Definitions**: Explicitly specify 3 verified factor definitions (`volume_surge_ratio`, `foreign_net_flow_ratio`, `volatility_20d`) with deterministic formulas, lookback windows, and preprocessing rules.
-6. **Robust Statistical Contract & HAC Covariance**: Enforce automated validation for OLS regression estimates, Newey-West HAC robust standard errors (`hac_max_lags = 4`, `kernel = "bartlett"`, `use_correction = True`, `use_t = True`), sample size policies ($n < 30 \rightarrow \text{unavailable}$, $30 \le n < 60 \rightarrow \text{available\_with\_limited\_sample\_warning}$, $60 \le n \le 252 \rightarrow \text{available}$), non-finite value rejections, confidence interval ordering ($\text{ci\_low} \le \text{coefficient} \le \text{ci\_high}$), and Breusch-Pagan heteroskedasticity diagnostics.
-7. **Single Hash Ownership & Canonical Serialization**: Define single responsibility boundaries where `RegressionResearchArtifact` Builder computes `content_sha256`, `serialize_regression_artifact()` produces canonical bytes, and `publisher.py` calculates `object_sha256` once to determine storage path and metadata pointer `sha256`.
-8. **Canonical & Metadata Binding without Schema v1 Mutation**: Keep `ProfessionalReportIdentity` (`schema_version = 1`) unchanged. Bind the full content-addressed pointer in `ReportMetadataV2.regression_research` and store a summary reference in `ProfessionalPostCloseReport.quantitative_research.data.regression_reference`.
-9. **View Model Overlay Interface & Graceful 200 OK Degradation**: Keep `ProfessionalPostCloseReport` unmutated. Use `build_professional_report_view(report, regression_artifact=None, regression_unavailable_reason=None, pdf_download_url=None)` overlay interface. Ensure missing, corrupted, or statistically invalid regression artifacts set `quantitative_research.status = "unavailable"` in the view model, preserving report **HTTP 200 OK** availability without triggering the global HTTP 503 error handler.
-10. **Offline Research Dependency Isolation**: Isolate heavy econometric libraries (`statsmodels`) to offline research/batch modules (`requirements-report.txt`), ensuring `stock_papi.application`, HTTP routes, and Cloud Run cold-start paths NEVER import `statsmodels` at the top level.
+2. **Self-Contained Input Dataset Lineage**: Define `RegressionInputDataset` (`schema_version = 1`, `kind = "absorb-regression-input-dataset"`) stored at `objects/regression-input/<object_sha256>.json` (`MAX_REGRESSION_INPUT_DATASET_BYTES = 5_000_000`), embedding complete 252-row raw observation matrix data (`factor_value_stage = "raw"`) and binding `input_dataset_object`, `input_dataset_sha256`, `input_dataset_content_sha256`, and `input_dataset_rows_sha256` to the regression artifact.
+3. **252 Session Source Coverage & Aggregate Manifest**: Enforce explicit temporal source coverage (`first_source_session`, `last_source_session`, `lookback_start_session`, `source_object_count`), ensuring source objects or aggregate manifest (`quant/v1/manifests/TW-YYYYMMDDTHHMMSSZ-<12hex>.json`) fully cover all feature sessions, label end sessions, and volatility price lookbacks (`lookback_start_session = calendar.shift(first_feature_session, -20)`).
+4. **Strict Point-in-Time & Session Calendar Lineage**: Enforce explicit session boundaries (`first_feature_session`, `last_feature_session`, `first_label_end_session`, `last_label_end_session`, `label_horizon_sessions = 5`) where `feature_session_t < label_end_session_t <= source_market_date`, calculated via trading calendar to prevent forward look-ahead label leakage.
+5. **Market Index Dependent Variable**: Define dependent variable as `five_session_forward_return` ($Y_t = \frac{P_{t+5}}{P_t} - 1$, where $P_t$ is official TAIEX closing price on session $t$, and $P_{t+5}$ is official TAIEX closing price 5 trading sessions ahead).
+6. **Exact Factor & Volatility Lookback Specifications**: Explicitly specify 3 verified factor definitions (`volume_surge_ratio`, `foreign_net_flow_ratio`, `volatility_20d` requiring 21 closing prices for 20 log returns), with deterministic formulas and raw factor stage boundaries.
+7. **Robust Statistical Contract & HAC Covariance**: Enforce automated validation for OLS regression estimates, Newey-West HAC robust standard errors (`hac_max_lags = 4`, `kernel = "bartlett"`, `use_correction = True`, `use_t = True`), sample size policies ($n < 30 \rightarrow \text{unavailable}$, $30 \le n < 60 \rightarrow \text{available\_with\_limited\_sample\_warning}$, $60 \le n \le 252 \rightarrow \text{available}$), non-finite value rejections, confidence interval ordering ($\text{ci\_low} \le \text{coefficient} \le \text{ci\_high}$), and Breusch-Pagan heteroskedasticity diagnostics.
+8. **Single Hash Ownership & Canonical Serialization**: Define single responsibility boundaries where `RegressionResearchArtifact` Builder computes `content_sha256`, `serialize_regression_artifact()` produces canonical bytes, and `publisher.py` calculates `object_sha256` once to determine storage path and metadata pointer `sha256`.
+9. **Canonical & Metadata Binding without Schema v1 Mutation**: Keep `ProfessionalReportIdentity` (`schema_version = 1`) unchanged. Bind the full content-addressed pointer in `ReportMetadataV2.regression_research` and store a summary reference in `ProfessionalPostCloseReport.quantitative_research.data.regression_reference`.
+10. **View Model Overlay Interface & Graceful 200 OK Degradation**: Keep `ProfessionalPostCloseReport` unmutated. Use `build_professional_report_view(report, regression_artifact=None, regression_unavailable_reason=None, pdf_download_url=None)` overlay interface. Ensure missing, corrupted, or statistically invalid regression artifacts set `quantitative_research.status = "unavailable"` in the view model, preserving report **HTTP 200 OK** availability without triggering the global HTTP 503 error handler.
+11. **Offline Research Dependency Isolation**: Isolate heavy econometric libraries (`statsmodels`) to offline research/batch modules (`requirements-report.txt`), ensuring `stock_papi.application`, HTTP routes, and Cloud Run cold-start paths NEVER import `statsmodels` at the top level.
 
 ---
 
-## 3. Non-Goals
+## 3. Non-Goals & Option B Source Readiness Policy
 
 - **No LightGBM / Tree Model Training**: Task C focuses exclusively on linear econometric regression explainers.
 - **No SHAP / Tree Explainer Integration**: SHAP value calculation for tree models is out of scope.
 - **No Probability Calibration / Model Promotion**: Prediction capability gates remain blocked. No probability or win rate outputs are generated.
 - **No Buy / Sell Signals**: No trading recommendations, entry/exit signals, or price targets are generated.
-- **No Sample / Mock Data Generation**: `production_regression_input_ready = false` and `production_regression_artifact_available = false` in Task C v1. If a verified `RegressionInputDataset` is not available in repository storage, the artifact builder returns `None`. The system NEVER generates fake or sample coefficients for production reports.
+- **Option B Source Readiness Declarations**:
+  - `production_regression_source_adapter_ready = false`
+  - `production_regression_input_ready = false`
+  - `production_regression_artifact_available = false`
+  - *Policy*: The specified raw TWSE market data sources (`total_shares_traded`, `foreign_net_buy_twd_million`, `total_market_turnover_twd_million`, `TAIEX closing_price`) are classified as **future required source contracts**, NOT currently verified repository sources.
+  - *Behavior*: In Task C v1, `build_regression_research_artifact()` MUST return `None`. The production publisher MUST NOT publish available regression artifacts for live reports. Fixtures are strictly reserved for unit testing schema, serializers, and publisher rollback. The HTML presentation section is fixed to the graceful `"unavailable"` alert card.
 - **No Task D Execution**: Task D (Weekly Model / Production Cutover) is strictly prohibited.
 - **No Production Deployment / GCS Mutation**: No Cloud Run deployments, GCS updates, backfills, or LINE notifications.
 
@@ -58,7 +64,7 @@ Currently, `quantitative_research` section in `professional_builder.py` contains
 
 ---
 
-## 5. Selected Architecture: Approach B (Independent Content-Addressed Regression Research Artifact)
+## 5. Selected Architecture & Storage Root Definitions
 
 We select **Approach B**, which creates a separate, content-addressed `RegressionResearchArtifact` stored under `objects/regression/<object_sha256>.json`, bound via an exact whitelist pointer in `ReportMetadataV2` and a summary reference in `ProfessionalPostCloseReport`.
 
@@ -100,6 +106,11 @@ We select **Approach B**, which creates a separate, content-addressed `Regressio
 +------------------------------------+        +------------------------------------+
 ```
 
+### Storage Root & Relative Path Contracts:
+1. **Pointer Relative Path**: All pointers stored in metadata, artifacts, and input dataset identity use Storage-root-relative paths (e.g. `objects/regression/<sha>.json`, `objects/regression-input/<sha>.json`, `quant/v1/manifests/TW-YYYYMMDDTHHMMSSZ-<12hex>.json`). Pointers MUST NOT include physical publication root prefixes (`publish/` or `reports/v2/`).
+2. **Local Filesystem Root**: Physical storage location on disk (e.g. `<workspace>/publish/`).
+3. **Storage Adapter Responsibility**: The storage layer (`reporting/publisher.py` or `stock_papi/application.py`) is solely responsible for prepending the physical root (`publish/` or `reports/v2/`) during I/O operations.
+
 ---
 
 ## 6. Alternatives Considered
@@ -124,7 +135,9 @@ REGRESSION_ARTIFACT_KIND = "absorb-regression-research-artifact"
 MAX_REGRESSION_ARTIFACT_BYTES: int = 2_000_000  # 2MB strict size limit
 ```
 
-### JSON Structure:
+### JSON Structure (Parseable Minimal 1-Row Example):
+*Note*: The following is a valid, parseable minimal 1-row fixture. Production artifacts contain up to 252 rows.
+
 ```json
 {
   "schema_version": 1,
@@ -259,12 +272,14 @@ MAX_REGRESSION_ARTIFACT_BYTES: int = 2_000_000  # 2MB strict size limit
 
 ## 8. Self-Contained Input Dataset Lineage Contract (`RegressionInputDataset`)
 
-Multi-session regression estimation requires a self-contained, content-addressed input dataset artifact storing the complete 252-row observation matrix.
+Multi-session regression estimation requires a self-contained, content-addressed input dataset artifact storing the complete 252-row raw observation matrix.
 
 Path: `objects/regression-input/<object_sha256>.json`  
 Constant: `MAX_REGRESSION_INPUT_DATASET_BYTES: int = 5_000_000` (5MB)
 
-### JSON Structure (`RegressionInputDataset`):
+### JSON Structure (Parseable Minimal 1-Row Example):
+*Note*: The following is a valid, parseable minimal 1-row fixture. Production input datasets contain 252 rows.
+
 ```json
 {
   "schema_version": 1,
@@ -278,7 +293,14 @@ Constant: `MAX_REGRESSION_INPUT_DATASET_BYTES: int = 5_000_000` (5MB)
     "last_feature_session": "2026-07-10",
     "first_label_end_session": "2025-07-17",
     "last_label_end_session": "2026-07-17",
-    "row_count": 252,
+    "first_source_session": "2025-06-10",
+    "last_source_session": "2026-07-17",
+    "lookback_start_session": "2025-06-10",
+    "source_object_count": 1,
+    "aggregate_manifest_object": "quant/v1/manifests/TW-20260717T103000Z-a1b2c3d4e5f6.json",
+    "aggregate_manifest_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "aggregate_manifest_schema_version": 1,
+    "row_count": 1,
     "calendar_id": "TWSE_TRADING_CALENDAR",
     "calendar_version": "2026.1",
     "calendar_sha256": "c1a2l3e4n5d6a7r8901234567890abcdefc1a2l3e4n5d6a7r8901234567890ab",
@@ -288,7 +310,7 @@ Constant: `MAX_REGRESSION_INPUT_DATASET_BYTES: int = 5_000_000` (5MB)
   },
   "source_objects": [
     {
-      "object": "publish/quant/v1/manifests/TW-20260717.json",
+      "object": "quant/v1/manifests/TW-20260717T103000Z-a1b2c3d4e5f6.json",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "kind": "absorb-quant-manifest",
       "schema_version": 1,
@@ -334,6 +356,7 @@ Constant: `MAX_REGRESSION_INPUT_DATASET_BYTES: int = 5_000_000` (5MB)
     }
   ],
   "preprocessing_policy": {
+    "factor_value_stage": "raw",
     "missing_value_policy": "listwise_deletion",
     "winsorization_policy": "1st_99th_percentile_linear_interpolation",
     "standardization_policy": "z_score_sample_std_ddof_1"
@@ -376,16 +399,13 @@ Constant: `MAX_REGRESSION_INPUT_DATASET_BYTES: int = 5_000_000` (5MB)
 - No duplicate `feature_session` dates.
 - `row_count == len(rows)`.
 - All `factor_values` keys match factor definitions exactly.
+- `factor_value_stage == "raw"` (stores raw, unwinsorized, unstandardized values).
 - All numbers finite (`NaN`, `Inf`, `bool` as float rejected).
 - `label_end_session == calendar.shift(feature_session, +5) <= source_market_date`.
 - `taiex_close_t > 0` and `taiex_close_t_plus_5 > 0`.
 - `five_session_forward_return` matches `(taiex_close_t_plus_5 / taiex_close_t) - 1` within tolerance $10^{-6}$.
-
-### Readiness & Non-Mocking Policy:
-- `production_regression_input_ready = false` and `production_regression_artifact_available = false` in Task C v1.
-- If a verified `RegressionInputDataset` is absent, `build_regression_research_artifact()` returns `None`.
-- The publisher and route handler evaluate `quantitative_research.status = "unavailable"` with reason `"未提供經過 Content-Addressed 驗證之 RegressionInputDataset"`.
-- The system NEVER generates fake or sample coefficients for production reports.
+- `source_object_count == len(source_objects)`.
+- Temporal range `lookback_start_session` through `last_label_end_session` must be covered by source objects or aggregate manifest.
 
 ---
 
@@ -407,6 +427,7 @@ Constant: `MAX_REGRESSION_INPUT_DATASET_BYTES: int = 5_000_000` (5MB)
 - **Source**: `twse_taiex_daily_closing` (`closing_price`).
 - **Unit**: Daily standard deviation (dimensionless float).
 - **Formula**: $\sigma_{20d, t} = \text{std}(\{ \ln(P_k / P_{k-1}) \}_{k=t-19}^t)$, 20-session sample standard deviation ($\text{ddof} = 1$) of daily log returns of TAIEX closing price $P_k$, unannualized daily basis.
+- **Lookback Requirement**: `return_lookback_sessions = 20`, `required_price_observations = 21` (closing prices $P_{t-20}, P_{t-19}, \dots, P_t$ to yield 20 log returns $r_k = \ln(P_k / P_{k-1})$ for $k = t-19 \dots t$). `lookback_start_session` at least `calendar.shift(first_feature_session, -20)`.
 
 *Note*: `industry_momentum_score` is removed from v1 factor list because repository observation manifests currently lack a verified cross-sectional industry index pipeline. No unverified factor placeholders are retained.
 
@@ -422,15 +443,14 @@ For each observation row $t$ in the regression estimation matrix:
 - Dependent Variable:
   $$Y_t = \frac{P_{\text{label\_end\_session\_t}}}{P_{\text{label\_start\_session\_t}}} - 1$$
 
-### Strict Calendar Temporal Constraint:
-1. **Per-Row Constraint**:
-   $$\text{feature\_session\_t} < \text{label\_end\_session\_t} \le \text{source\_market\_date}$$
-2. **Latest Eligible Feature Session**:
-   $$\text{latest\_eligible\_feature\_session} = \text{calendar.shift}(\text{source\_market\_date}, -5)$$
-3. **Aggregate Lineage Fields**:
-   - `first_feature_session` & `last_feature_session`
-   - `first_label_end_session` & `last_label_end_session`
-   - `label_horizon_sessions = 5`
+### Factor Preprocessing Order:
+1. **Validate Raw Input Dataset**: Verify `factor_value_stage == "raw"`.
+2. **Select Estimation Window**: Select last 252 mature sessions where `label_end_session <= source_market_date`.
+3. **Listwise Deletion**: Drop rows with missing (`None`/`NaN`) values ($n < 30 \rightarrow$ Hard Failure).
+4. **Winsorization**: 1st and 99th percentiles estimated in-sample over 252 estimation window using `linear` quantile interpolation.
+5. **Z-Score Standardization**: Standardize features using in-sample mean $\mu$ and sample standard deviation $\sigma$ with $\text{ddof} = 1$.
+6. **Matrix Rank Check**: Verify design matrix full rank ($\text{rank}(X) = k + 1$).
+7. **OLS / HAC Fitting**: Compute regression estimates and Newey-West HAC covariance.
 
 ---
 
@@ -458,20 +478,6 @@ For each observation row $t$ in the regression estimation matrix:
   - Intercept included in design matrix $X$.
   - Full rank matrix required ($\text{rank}(X) = k + 1$).
   - Deterministic factor column ordering.
-
-### Diagnostic Thresholds & Hard Failures vs Warnings:
-
-| Diagnostic / Gate | Metric / Test | Threshold | Action |
-|---|---|---|---|
-| **Sample Count** | $n$ | $n < 30$ | **Hard Failure** (Section `unavailable`) |
-| **Matrix Rank** | $\text{rank}(X)$ | Rank deficient ($\text{rank} < k + 1$) | **Hard Failure** (Section `unavailable`) |
-| **Numeric Integrity** | Non-finite check | Any `NaN`/`Inf`/`bool` | **Hard Failure** (Section `unavailable`) |
-| **Temporal Alignment** | `last_label_end_session` | $> \text{source\_market\_date}$ | **Hard Failure** (Section `unavailable`) |
-| **CI Consistency** | $\text{ci\_low} \le \beta \le \text{ci\_high}$ | Unordered | **Hard Failure** (Section `unavailable`) |
-| **Multicollinearity** | Max VIF (Excluding Intercept) | $< 5.0$ (Passed)<br>$5.0 \le \text{VIF} < 10.0$ (Warning badge)<br>$\ge 10.0$ (Severe warning badge) | Diagnostic Warning (Does not fail report) |
-| **Heteroskedasticity** | Breusch-Pagan Test | $p < 0.05$ | Diagnostic Warning badge |
-| **Autocorrelation** | Durbin-Watson | $DW < 1.5$ or $DW > 2.5$ | Diagnostic Warning badge |
-| **Normality** | Jarque-Bera Test | $p < 0.05$ | Diagnostic Warning badge |
 
 ---
 
@@ -502,7 +508,38 @@ For each observation row $t$ in the regression estimation matrix:
 
 ---
 
-## 13. Publication Flow & Exact Ordering
+## 13. Input Dataset Immutable Publisher (`reporting/regression_input_publisher.py`)
+
+Path: `reporting/regression_input_publisher.py`
+
+### Publication Sequence:
+1. Validate `RegressionInputDataset` instance / document.
+2. Call `serialize_regression_input_dataset(document)` ONCE.
+3. Check `len(dataset_bytes) <= MAX_REGRESSION_INPUT_DATASET_BYTES` (5MB).
+4. Compute `object_sha256 = hashlib.sha256(dataset_bytes).hexdigest()`.
+5. Determine storage path `object_path = f"objects/regression-input/{object_sha256}.json"`.
+6. If file exists: fail closed on byte conflict; reuse existing file if identical.
+7. Atomic write to `objects/regression-input/<object_sha256>.json`.
+8. Read-back raw bytes.
+9. Verify size, SHA, UTF-8, JSON, Schema.
+10. Verify `content_sha256` and `canonical_rows_sha256`.
+11. Return exact pointer dict:
+    ```json
+    {
+      "object": "objects/regression-input/<object_sha256>.json",
+      "sha256": "<object_sha256>",
+      "content_sha256": "<content_sha256>",
+      "rows_sha256": "<canonical_rows_sha256>",
+      "schema_version": 1,
+      "row_count": 252
+    }
+    ```
+
+*Readiness Rule*: If `production_regression_input_ready == false`, production batch pipelines MUST NOT invoke this publisher or publish fixture datasets.
+
+---
+
+## 14. Publication Flow & Exact Ordering
 
 The publisher (`reporting/publisher.py`) executes the exact 10-step atomic sequence:
 
@@ -521,7 +558,7 @@ Step 10: Commit Index (`index-TW.json`) and Latest (`latest-TW-post_close.json`)
 
 ---
 
-## 14. Canonical & Metadata Binding Rules
+## 15. Canonical & Metadata Binding Rules
 
 ### Exact Metadata Pointer Whitelist (`ReportMetadataV2.regression_research`):
 ```json
@@ -534,26 +571,10 @@ Step 10: Commit Index (`index-TW.json`) and Latest (`latest-TW-post_close.json`)
   "code_commit_sha": "da25d594d3b76865da22b891285ac0c85e710d86"
 }
 ```
-*Rule*: `pointer.object == f"objects/regression/{pointer.sha256}.json"`.
-
-### Canonical Report Summary Reference (`ProfessionalPostCloseReport`):
-`ProfessionalReportIdentity` (`schema_version = 1`) remains **UNMUTATED**.
-
-In `ProfessionalPostCloseReport.quantitative_research.data`:
-```json
-{
-  "regression_reference": {
-    "object_sha256": "<object_sha256>",
-    "content_sha256": "<semantic_content_sha256>",
-    "schema_version": 1,
-    "summary_status": "available"
-  }
-}
-```
 
 ---
 
-## 15. Route Loading & Application Loader
+## 16. Route Loading & Application Loader
 
 Path: `stock_papi/application.py`
 
@@ -574,19 +595,14 @@ def load_regression_object(
     return raw_bytes
 ```
 
-*Regex*: `_REGRESSION_OBJECT_PATH_RE = re.compile(r"^objects/regression/[0-9a-f]{64}\.json$")`.
-
-Route registration accepts `load_regression_object=None` optional dependency.
-
 ---
 
-## 16. View Model Overlay Interface & Graceful Degradation
+## 17. View Model Overlay Interface & Graceful Degradation
 
 Path: `reporting/professional_html.py` & `stock_papi/web/routes/reports.py`
 
 `ProfessionalPostCloseReport` is an immutable canonical object. HTTP route loading MUST NOT mutate `report.quantitative_research.status`.
 
-### View Model Overlay Signature:
 ```python
 def build_professional_report_view(
     report: ProfessionalPostCloseReport,
@@ -597,22 +613,9 @@ def build_professional_report_view(
 ) -> dict[str, Any]:
 ```
 
-### Route Data Flow & Degradation:
-1. Load metadata & canonical professional report object.
-2. If `metadata.regression_research` pointer is present:
-   - Call `load_regression_object` ONCE to get raw bytes.
-   - Verify size and SHA-256 hash using `hmac.compare_digest`.
-   - Parse JSON and validate `RegressionResearchArtifact.from_document()`.
-   - Execute `validate_regression_research_binding()`.
-   - Pass valid `regression_artifact` to `build_professional_report_view`.
-3. If pointer absent or any validation fails:
-   - Pass `regression_artifact = None` and `regression_unavailable_reason = "..."` to `build_professional_report_view`.
-   - View model sets `quantitative_research.status = "unavailable"`, `reason = "..."`.
-   - Report page **remains HTTP 200 OK**. (HTTP 503 handler is NOT invoked).
-
 ---
 
-## 17. Offline Research Dependency Installation Boundary
+## 18. Offline Research Dependency Installation Boundary
 
 1. **Dependency File Update**:
    - `requirements-report.txt` is updated with `statsmodels>=0.14.4,<0.15.0`.
@@ -627,15 +630,7 @@ def build_professional_report_view(
    - Heavy econometric libraries (`statsmodels`) MUST NOT be imported at the top level of `stock_papi.application`, HTTP routes, or Cloud Run cold-start paths.
    - `stock_papi/research/regression_deps.py` provides lazy function-scoped imports.
 4. **Cold-Start Guard Test**:
-   - `tests/test_cold_start_imports.py` (Architecture Guard Test) verifies that `import stock_papi.application` does NOT load `statsmodels` into `sys.modules`. (Expected Result: Pass before and after implementation).
-
----
-
-## 18. Future Adapters
-
-1. **PDF Generator**: `reporting/pdf_generator.py` renders a 1-page compact factor matrix table when `status == "available"`.
-2. **LINE Flex Message**: `stock_papi/integrations/line/` renders a 2-line summary card under `"模型方向參考"`.
-3. **Gemini Prompt**: `stock_papi/services/papi_service.py` formats regression coefficients into context prompts strictly wrapped with mandatory disclaimers.
+   - `tests/test_cold_start_imports.py` (Architecture Guard Test) verifies `import stock_papi.application` does NOT load `statsmodels` into `sys.modules`.
 
 ---
 

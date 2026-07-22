@@ -16,7 +16,7 @@
   - NO LightGBM training or SHAP execution.
   - NO probability, win rate, or trading signal generation.
   - NO prediction capability gate modifications (gates remain BLOCKED / UNAVAILABLE).
-  - NO sample or mock data generation in production builders (`production_regression_input_ready = false`).
+  - NO sample or mock data generation in production builders (`production_regression_source_adapter_ready = false`, `production_regression_input_ready = false`, `production_regression_artifact_available = false`).
   - NO Cloud Run deployment, Production GCS updates, backfills, or LINE notifications.
   - NO Task D execution.
 
@@ -46,7 +46,7 @@
   - `[NEW] tests/test_regression_input_schema.py`
 - **RED Test**: `tests/test_regression_input_schema.py::test_input_dataset_validates_rows_and_hashes`
 - **Expected Failure**: `ModuleNotFoundError: No module named 'reporting.regression_input_schema'`
-- **Minimal Implementation**: Implements `RegressionInputDataset.from_document()` validating `row_count == len(rows)`, ascending `feature_session` order, exact factor column keys, finite float values, and `canonical_rows_sha256` verification.
+- **Minimal Implementation**: Implements `RegressionInputDataset.from_document()` validating `row_count == len(rows)`, ascending `feature_session` order, exact factor column keys, `factor_value_stage == "raw"`, finite float values, and `canonical_rows_sha256` verification.
 - **Focused Command**: `python -m unittest tests.test_regression_input_schema -v`
 - **Acceptance Criteria**: Validates 252-row matrix schema, computes `canonical_rows_sha256` and `content_sha256`, and rejects duplicate sessions or non-finite values.
 - **Commit Message**: `feat(reporting): define self-contained regression input dataset schema and row serializers`
@@ -69,8 +69,8 @@
 
 ---
 
-### Task B3: Input Dataset Builder & Publisher Readiness
-- **Goal**: Build `build_regression_input_dataset()` and publisher module, ensuring `production_regression_input_ready = false` in Task C v1 if source objects are incomplete (builder returns `None` and does NOT publish partial/mock datasets).
+### Task B3: Input Dataset Builder & Readiness
+- **Goal**: Build `build_regression_input_dataset()`, enforcing Option B readiness declarations (`production_regression_source_adapter_ready = false`, `production_regression_input_ready = false`, `production_regression_artifact_available = false`). Builder returns `None` when source objects are incomplete and NEVER generates mock data in production.
 - **Exact Files**:
   - `[NEW] reporting/regression_input_builder.py`
   - `[NEW] tests/test_regression_input_builder.py`
@@ -81,6 +81,22 @@
 - **Acceptance Criteria**: Builder constructs valid input dataset when sources exist, or returns `None` without generating mock data.
 - **Commit Message**: `feat(reporting): implement regression input dataset builder and readiness checks`
 - **Rollback Boundary**: Delete `reporting/regression_input_builder.py` and `tests/test_regression_input_builder.py`.
+
+---
+
+### Task B4: Input Dataset Immutable Publisher
+- **Goal**: Build `reporting/regression_input_publisher.py` to publish `RegressionInputDataset` objects to `objects/regression-input/<object_sha256>.json` with atomic replace and 11-step read-back verification.
+- **Exact Files**:
+  - `[NEW] reporting/regression_input_publisher.py`
+  - `[NEW] tests/test_regression_input_publisher.py`
+  - `[MODIFY] reporting/publisher.py`
+- **RED Test**: `tests/test_regression_input_publisher.py::test_publishes_input_dataset_atomically_with_readback`
+- **Expected Failure**: `ModuleNotFoundError: No module named 'reporting.regression_input_publisher'`
+- **Minimal Implementation**: Implements atomic write to `objects/regression-input/<object_sha256>.json`, size check `<= 5MB`, `object_sha256` calculation, read-back verification, and failure injection rollback. If `production_regression_input_ready == false`, production batch pipeline MUST NOT invoke this publisher.
+- **Focused Command**: `python -m unittest tests.test_regression_input_publisher -v`
+- **Acceptance Criteria**: Publisher writes input dataset object, verifies SHA256/Rows SHA read-back, and cleans up uncommitted objects on error.
+- **Commit Message**: `feat(reporting): implement regression input dataset immutable publisher`
+- **Rollback Boundary**: Delete `reporting/regression_input_publisher.py`, `tests/test_regression_input_publisher.py` and revert `reporting/publisher.py`.
 
 ---
 
@@ -301,7 +317,7 @@
   - `python -m compileall reporting stock_papi tests`
   - `node --check static/app.js`
   - `git diff --check`
-- **Commit Message**: `docs: finalize regression input dataset reproducibility contract`
+- **Commit Message**: `docs: close regression source lineage and input publication contracts`
 - **Acceptance Criteria**: All 717+ unit tests pass, zero compile errors, zero git diff formatting warnings.
 - **Rollback Boundary**: N/A.
 
