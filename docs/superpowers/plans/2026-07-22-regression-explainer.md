@@ -3,7 +3,7 @@
 **Date:** 2026-07-22  
 **Status:** DRAFT — Pending Independent Review  
 **Target Branch:** `antigravity/task-c-regression-explainer-design`  
-**Design Spec:** [docs/superpowers/specs/2026-07-22-regression-explainer-design.md](file:///C:/Users/enzo/Documents/absorb-institutional-report/docs/superpowers/specs/2026-07-22-regression-explainer-design.md)  
+**Design Spec:** [Design Spec](../specs/2026-07-22-regression-explainer-design.md)  
 **Base SHA:** `da25d594d3b76865da22b891285ac0c85e710d86`  
 **Repository:** `enzo9355/absorb`  
 
@@ -16,6 +16,7 @@
   - NO LightGBM training or SHAP execution.
   - NO probability, win rate, or trading signal generation.
   - NO prediction capability gate modifications (gates remain BLOCKED / UNAVAILABLE).
+  - NO sample or mock data generation in production builders.
   - NO Cloud Run deployment, Production GCS updates, backfills, or LINE notifications.
   - NO Task D execution.
 
@@ -23,59 +24,60 @@
 
 ## Detailed Task Plan
 
-### Task A: Regression Schema Definitions & Validation
-- **Goal**: Define `RegressionResearchArtifact`, `RegressionSpec`, `RegressionResultItem`, `RegressionFitStatistics`, `RegressionDiagnostics`, and `RegressionPresentation` dataclasses with strict JSON schema versioning (`schema_version = 1`, `kind = "absorb-regression-research-artifact"`, `MAX_REGRESSION_ARTIFACT_BYTES = 2_000_000`).
+### Task A: Regression Schema Definitions & Canonical Serializer
+- **Goal**: Define `RegressionResearchArtifact`, `RegressionSpec`, `RegressionResultItem`, `RegressionFitStatistics`, `RegressionDiagnostics`, and `RegressionPresentation` dataclasses with strict JSON schema versioning (`schema_version = 1`, `kind = "absorb-regression-research-artifact"`, `MAX_REGRESSION_ARTIFACT_BYTES = 2_000_000`) and canonical serializer `serialize_regression_artifact()`.
 - **Exact Files**:
   - `[NEW] reporting/regression_schema.py`
   - `[NEW] tests/test_regression_schema.py`
 - **RED Test**: `tests/test_regression_schema.py::test_empty_document_raises_validation_error`
 - **Expected Failure**: `ModuleNotFoundError: No module named 'reporting.regression_schema'`
-- **Minimal Implementation**: Dataclasses with `from_document()`, `to_document()`, exact `object_sha256` and semantic `content_sha256` calculation, finite JSON checks, and forbidden word filtering (`Probability`, `勝率`, `上漲機率`, `下跌機率`, `正式預測`, `買進訊號`, `賣出訊號`).
+- **Minimal Implementation**: Dataclasses with `from_document()`, `to_document()`, `serialize_regression_artifact()`, `content_sha256` calculation (excluding `object_sha256` from `identity`), and forbidden word filtering (`Probability`, `勝率`, `上漲機率`, `下跌機率`, `正式預測`, `買進訊號`, `賣出訊號`).
 - **Focused Command**: `python -m unittest tests.test_regression_schema -v`
 - **Acceptance Criteria**: `RegressionResearchArtifact.from_document(doc)` passes for valid documents, enforces $0 \le R^2 \le 1$, $\text{ci\_low} \le \text{coef} \le \text{ci\_high}$, $\text{SE} \ge 0$, degrees of freedom $>0$, and raises `ValueError` for non-finite values or forbidden terms.
-- **Commit Message**: `feat(reporting): define regression research artifact schema and hash contracts`
+- **Commit Message**: `feat(reporting): define regression research artifact schema and canonical serializer`
 - **Rollback Boundary**: Delete `reporting/regression_schema.py` and `tests/test_regression_schema.py`.
 
 ---
 
-### Task B: Analysis Input & Point-in-Time Contract
-- **Goal**: Implement temporal boundary validator enforcing `feature_start_date`, `feature_end_date`, `label_start_date`, `label_end_date`, `label_horizon_sessions = 5` with calendar-based trading session alignment (`feature_date < label_end_date <= source_market_date`).
+### Task B: Input Dataset Lineage & Point-in-Time Session Contract
+- **Goal**: Implement `RegressionInputDataset` schema validation and point-in-time session boundary validator enforcing `first_feature_session`, `last_feature_session`, `first_label_end_session`, `last_label_end_session`, `label_horizon_sessions = 5` with calendar-based trading session alignment (`feature_session_t < label_end_session_t <= source_market_date`).
 - **Exact Files**:
   - `[NEW] reporting/regression_pit.py`
   - `[NEW] tests/test_regression_pit.py`
-- **RED Test**: `tests/test_regression_pit.py::test_label_end_date_exceeding_source_market_date_fails`
+- **RED Test**: `tests/test_regression_pit.py::test_label_end_session_exceeding_source_market_date_fails`
 - **Expected Failure**: `ModuleNotFoundError: No module named 'reporting.regression_pit'`
-- **Minimal Implementation**: `validate_point_in_time_bounds(feature_dates, label_dates, source_market_date, calendar)` returning `is_valid: bool` and error reason. Rejects future look-ahead label leakage.
+- **Minimal Implementation**: `validate_point_in_time_bounds()` and `RegressionInputDataset.from_document()` returning `is_valid: bool` and error reason. Rejects future look-ahead label leakage, network fallbacks, and unhashed local CSVs.
 - **Focused Command**: `python -m unittest tests.test_regression_pit -v`
-- **Acceptance Criteria**: Validates trading calendar session bounds and rejects any dataset where label end date extends past source market date.
-- **Commit Message**: `feat(reporting): implement point in time temporal bounds validator for regression explainer`
+- **Acceptance Criteria**: Validates trading calendar session bounds and rejects any dataset where label end session extends past source market date.
+- **Commit Message**: `feat(reporting): implement regression input dataset lineage and PIT validator`
 - **Rollback Boundary**: Delete `reporting/regression_pit.py` and `tests/test_regression_pit.py`.
 
 ---
 
-### Task C: Offline Dependency Boundary & Cold-Start Isolation
-- **Goal**: Create offline research dependency loader and cold-start import isolation test to guarantee heavy econometric libraries (`statsmodels`) are NEVER imported at top level of `stock_papi.application`, HTTP routes, or Cloud Run cold-start paths.
+### Task C: Dependency Manifest & Cold-Start Guard Test
+- **Goal**: Update `requirements-report.txt` with `statsmodels` version constraint, create `stock_papi/research/regression_deps.py`, and build cold-start guard test verifying heavy econometric libraries (`statsmodels`) are NEVER imported at top level of `stock_papi.application`, HTTP routes, or Cloud Run cold-start paths.
 - **Exact Files**:
+  - `[MODIFY] requirements-report.txt`
   - `[NEW] stock_papi/research/regression_deps.py`
   - `[NEW] tests/test_cold_start_imports.py`
 - **RED Test**: `tests/test_cold_start_imports.py::test_statsmodels_not_imported_on_application_import`
 - **Expected Failure**: Assert `sys.modules` does not contain `statsmodels` when `import stock_papi.application` executes.
-- **Minimal Implementation**: Lazy import wrapper inside `stock_papi/research/regression_deps.py` loading `statsmodels` exclusively inside function scope.
+- **Minimal Implementation**: Update `requirements-report.txt` with `statsmodels>=0.14.0,<0.15.0`. Implement lazy import wrapper inside `stock_papi/research/regression_deps.py` loading `statsmodels` exclusively inside function scope.
 - **Focused Command**: `python -m unittest tests.test_cold_start_imports -v`
 - **Acceptance Criteria**: `stock_papi.application` and `stock_papi.web.routes.reports` can be imported without loading `statsmodels` into `sys.modules`.
 - **Commit Message**: `test(architecture): enforce cold start top level import isolation for statsmodels`
-- **Rollback Boundary**: Delete `stock_papi/research/regression_deps.py` and `tests/test_cold_start_imports.py`.
+- **Rollback Boundary**: `git checkout origin/main -- requirements-report.txt` and delete `stock_papi/research/regression_deps.py`, `tests/test_cold_start_imports.py`.
 
 ---
 
-### Task D: OLS & HAC Covariance Adapter
-- **Goal**: Build `compute_ols_hac_regression(dependent_series, factor_matrix, lags=4)` using `statsmodels` inside offline research module to compute OLS estimates, Newey-West HAC robust standard errors (`hac_max_lags = 4`), t-statistics, p-values, and 95% confidence intervals.
+### Task D: OLS & Newey-West HAC Covariance Adapter
+- **Goal**: Build `compute_ols_hac_regression(dependent_series, factor_matrix, lags=4)` using `statsmodels` inside offline research module to compute OLS estimates, Newey-West HAC robust standard errors (`hac_max_lags = 4`), t-statistics, p-values, and 95% confidence intervals for `five_session_forward_return`.
 - **Exact Files**:
   - `[NEW] reporting/regression_adapter.py`
   - `[NEW] tests/test_regression_adapter.py`
 - **RED Test**: `tests/test_regression_adapter.py::test_computes_newey_west_hac_estimates`
 - **Expected Failure**: `ModuleNotFoundError: No module named 'reporting.regression_adapter'`
-- **Minimal Implementation**: Calculates OLS estimates with Newey-West HAC covariance matrix adjustment for overlapping 5-day return series.
+- **Minimal Implementation**: Calculates OLS estimates with Newey-West HAC covariance matrix adjustment for overlapping 5-session forward return series.
 - **Focused Command**: `python -m unittest tests.test_regression_adapter -v`
 - **Acceptance Criteria**: Estimates match reference HAC standard errors, t-statistics, and confidence intervals.
 - **Commit Message**: `feat(reporting): implement OLS factor regression adapter with Newey-West HAC covariance`
@@ -84,7 +86,7 @@
 ---
 
 ### Task E: Diagnostics & Validation Engine
-- **Goal**: Implement statistical validation engine evaluating sample count policy ($n < 30 \rightarrow \text{unavailable}$, $30 \le n < 60 \rightarrow \text{available\_with\_limited\_sample\_warning}$, $60 \le n \le 252 \rightarrow \text{available}$), design matrix rank, Breusch-Pagan heteroskedasticity test, VIF multicollinearity, and Durbin-Watson autocorrelation.
+- **Goal**: Implement statistical validation engine evaluating sample count policy ($n < 30 \rightarrow \text{unavailable}$, $30 \le n < 60 \rightarrow \text{available\_with\_limited\_sample\_warning}$, $60 \le n \le 252 \rightarrow \text{available}$), design matrix rank, Breusch-Pagan heteroskedasticity test, VIF multicollinearity (excluding intercept), Jarque-Bera normality, and Durbin-Watson autocorrelation.
 - **Exact Files**:
   - `[NEW] reporting/regression_validation.py`
   - `[NEW] tests/test_regression_validation.py`
@@ -99,31 +101,31 @@
 ---
 
 ### Task F: Regression Artifact Builder
-- **Goal**: Build `build_regression_research_artifact(...)` orchestrator to generate content-addressed `RegressionResearchArtifact` documents from verified market observation manifests.
+- **Goal**: Build `build_regression_research_artifact(...)` orchestrator to generate content-addressed `RegressionResearchArtifact` documents from verified `RegressionInputDataset` manifests. Returns `None` if input dataset is absent (never generates mock data).
 - **Exact Files**:
   - `[NEW] reporting/regression_builder.py`
   - `[NEW] tests/test_regression_builder.py`
 - **RED Test**: `tests/test_regression_builder.py::test_builds_valid_regression_research_artifact`
 - **Expected Failure**: `ModuleNotFoundError: No module named 'reporting.regression_builder'`
-- **Minimal Implementation**: Orchestrates adapter computation, validation engine, mandatory disclaimers, and content-addressed `object_sha256` and `content_sha256` generation. Returns `None` on Hard Failures.
+- **Minimal Implementation**: Orchestrates adapter computation, validation engine, mandatory disclaimers, and content-addressed `content_sha256` generation. Returns `None` on missing input dataset or Hard Failures.
 - **Focused Command**: `python -m unittest tests.test_regression_builder -v`
-- **Acceptance Criteria**: Successfully builds content-addressed `RegressionResearchArtifact` or returns `None` on invalid data.
-- **Commit Message**: `feat(reporting): implement regression research artifact builder`
+- **Acceptance Criteria**: Successfully builds content-addressed `RegressionResearchArtifact` when `RegressionInputDataset` is present, or returns `None` on missing data.
+- **Commit Message**: `feat(reporting): implement regression research artifact builder with input dataset lineage`
 - **Rollback Boundary**: Delete `reporting/regression_builder.py` and `tests/test_regression_builder.py`.
 
 ---
 
-### Task G: Regression Object Publisher
-- **Goal**: Update `reporting/publisher.py` to execute the exact 10-step atomic publication sequence, writing `objects/regression/<object_sha256>.json` with atomic replace and read-back size/hash verification.
+### Task G: Single-Hash Publisher Integration
+- **Goal**: Update `reporting/publisher.py` to execute the exact 10-step atomic publication sequence, calling `serialize_regression_artifact()` once to compute `object_sha256` and write `objects/regression/<object_sha256>.json` with atomic replace and read-back verification.
 - **Exact Files**:
   - `[MODIFY] reporting/publisher.py`
   - `[MODIFY] tests/test_canonical_publisher_integrity.py`
-- **RED Test**: `tests/test_canonical_publisher_integrity.py::test_publishes_regression_artifact_with_exact_ten_step_order`
+- **RED Test**: `tests/test_canonical_publisher_integrity.py::test_publishes_regression_artifact_with_single_hash_ownership`
 - **Expected Failure**: `TypeError: publish_report_v2() got an unexpected keyword argument 'regression_artifact'`
-- **Minimal Implementation**: Implements atomic write to `objects/regression/<object_sha256>.json`, read-back verification against `MAX_REGRESSION_ARTIFACT_BYTES = 2_000_000`, and exact metadata pointer injection (`metadata/<metadata_sha256>.json`).
+- **Minimal Implementation**: Implements atomic write to `objects/regression/<object_sha256>.json`, read-back verification against `MAX_REGRESSION_ARTIFACT_BYTES = 2_000_000`, and exact metadata pointer injection (`metadata/<metadata_sha256>.json`). Saves in-memory byte backups `previous_index_bytes` and `previous_latest_bytes` for rollback.
 - **Focused Command**: `python -m unittest tests.test_canonical_publisher_integrity -v`
 - **Acceptance Criteria**: Publisher writes regression object, verifies SHA256 read-back, and injects exact metadata pointer.
-- **Commit Message**: `feat(reporting): integrate regression artifact publishing into atomic ten step sequence`
+- **Commit Message**: `feat(reporting): integrate single hash regression publishing into atomic ten step sequence`
 - **Rollback Boundary**: `git checkout origin/main -- reporting/publisher.py`.
 
 ---
@@ -173,32 +175,32 @@
 
 ---
 
-### Task K: Route Optional Loading & Graceful Degradation
-- **Goal**: Update `_observation_page` in `stock_papi/web/routes/reports.py` to attempt optional regression loading using `load_regression_object`. If missing or invalid, gracefully degrades `quantitative_research` view model to `status = "unavailable"`, maintaining HTTP 200 OK.
+### Task K: Route Optional Loading & View Model Overlay
+- **Goal**: Update `_observation_page` in `stock_papi/web/routes/reports.py` to attempt optional regression loading using `load_regression_object`. Pass loaded artifact or `regression_unavailable_reason` to `build_professional_report_view()` overlay without mutating canonical report object. Maintains HTTP 200 OK.
 - **Exact Files**:
   - `[MODIFY] stock_papi/web/routes/reports.py`
   - `[NEW] tests/test_regression_route.py`
 - **RED Test**: `tests/test_regression_route.py::test_missing_regression_artifact_returns_200_with_unavailable_section`
 - **Expected Failure**: Route attempts to invoke `load_regression_object` when passed in dependency injection.
-- **Minimal Implementation**: Adds `load_regression_object=None` optional dependency to `register_report_routes`. Implements 7-step route data flow for regression artifact loading and optional binding validation.
+- **Minimal Implementation**: Adds `load_regression_object=None` optional dependency to `register_report_routes`. Implements 7-step route data flow for regression artifact loading and view model overlay.
 - **Focused Command**: `python -m unittest tests.test_regression_route -v`
 - **Acceptance Criteria**: Valid regression artifact populates `quantitative_research` view model; missing or corrupted regression artifact returns HTTP 200 OK with `status = "unavailable"`.
-- **Commit Message**: `feat(web): add optional regression artifact loading with graceful 200 OK degradation`
+- **Commit Message**: `feat(web): add optional regression artifact loading with view model overlay degradation`
 - **Rollback Boundary**: `git checkout origin/main -- stock_papi/web/routes/reports.py` and delete `tests/test_regression_route.py`.
 
 ---
 
-### Task L: HTML View Model Adapter
-- **Goal**: Update `build_professional_report_view()` in `reporting/professional_html.py` to format `quantitative_research` section data into Jinja-safe view model with mandatory disclaimers and AI labels.
+### Task L: HTML View Model Overlay Adapter
+- **Goal**: Update `build_professional_report_view(report, *, regression_artifact=None, regression_unavailable_reason=None, pdf_download_url=None)` in `reporting/professional_html.py` to format `quantitative_research` view model without mutating `report`.
 - **Exact Files**:
   - `[MODIFY] reporting/professional_html.py`
   - `[MODIFY] tests/test_professional_report_html.py`
-- **RED Test**: `tests/test_professional_report_html.py::test_view_model_contains_regression_research_data`
-- **Expected Failure**: `KeyError` or missing regression presentation fields in view model.
-- **Minimal Implementation**: Formats Jinja-safe view model containing section title, `AI 模型參考建議`, `模型方向參考`, factor exposures table, diagnostic badges, and mandatory disclosure text.
+- **RED Test**: `tests/test_professional_report_html.py::test_view_model_overlay_does_not_mutate_canonical_report`
+- **Expected Failure**: `TypeError: build_professional_report_view() got an unexpected keyword argument 'regression_artifact'`
+- **Minimal Implementation**: Formats Jinja-safe view model containing section title, `AI 模型參考建議`, `模型方向參考`, factor exposures table, diagnostic badges, and mandatory disclosure text. Leaves `report.quantitative_research.status` unmutated.
 - **Focused Command**: `python -m unittest tests.test_professional_report_html -v`
-- **Acceptance Criteria**: View model contains structured factor exposures, mandatory disclaimers, and zero forbidden terms.
-- **Commit Message**: `feat(reporting): format quantitative regression research section in HTML view model`
+- **Acceptance Criteria**: View model contains structured factor exposures and mandatory disclaimers; canonical report object remains unmutated.
+- **Commit Message**: `feat(reporting): implement view model overlay interface for quantitative regression section`
 - **Rollback Boundary**: `git checkout origin/main -- reporting/professional_html.py`.
 
 ---
@@ -218,16 +220,16 @@
 
 ---
 
-### Task N: Publisher Rollback & Failure Injection Tests
-- **Goal**: Build failure injection tests verifying that if metadata, index, or latest write fails during publishing, newly created regression objects are cleanly unlinked without deleting pre-existing identical immutable objects.
+### Task N: Publisher Rollback & Failure Injection Test Suite
+- **Goal**: Build failure injection tests verifying that if metadata, index, or latest write fails during publishing, newly created regression objects are cleanly unlinked and previous index/latest states are restored.
 - **Exact Files**:
   - `[NEW] tests/test_regression_publisher_rollback.py`
-- **RED Test**: `tests/test_regression_publisher_rollback.py::test_publisher_rollback_cleans_uncommitted_objects`
-- **Expected Failure**: Test fails until publisher cleanup logic handles regression artifact unlinking on write failure.
-- **Minimal Implementation**: Verifies unlinking of newly created `objects/regression/<object_sha256>.json` when metadata or index write throws an exception.
+- **RED Test**: `tests/test_regression_publisher_rollback.py::test_publisher_rollback_restores_previous_index_and_latest`
+- **Expected Failure**: Test fails until publisher rollback restores `previous_index_bytes` and `previous_latest_bytes` on write failure.
+- **Minimal Implementation**: Verifies unlinking of newly created `objects/regression/<object_sha256>.json` and byte restoration of `index-TW.json` and `latest-TW-post_close.json` on simulated write exceptions.
 - **Focused Command**: `python -m unittest tests.test_regression_publisher_rollback -v`
-- **Acceptance Criteria**: Publisher rollback cleans up newly created regression artifacts without mutating existing files or pointers.
-- **Commit Message**: `test(reporting): verify publisher rollback and failure injection for regression artifacts`
+- **Acceptance Criteria**: Publisher rollback restores index/latest states and cleans up newly created regression artifacts without mutating pre-existing identical files.
+- **Commit Message**: `test(reporting): verify publisher rollback and failure injection suite for regression artifacts`
 - **Rollback Boundary**: Delete `tests/test_regression_publisher_rollback.py`.
 
 ---
@@ -268,7 +270,7 @@
   - `python -m compileall reporting stock_papi tests`
   - `node --check static/app.js`
   - `git diff --check`
-- **Commit Message**: `docs: resolve regression explainer integrity and statistical contracts`
+- **Commit Message**: `docs: close regression input lineage and execution contracts`
 - **Acceptance Criteria**: All 717+ unit tests pass, zero compile errors, zero git diff formatting warnings.
 - **Rollback Boundary**: N/A.
 
