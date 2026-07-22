@@ -1,37 +1,125 @@
-# -*- coding: utf-8 -*-
-"""Presentation layer, disclosure, and HTML template boundary tests."""
+"""Real overlay and Flask/Jinja rendering tests for regression research."""
 
+from pathlib import Path
 import unittest
-from reporting.professional_schema import (
-    ProfessionalPostCloseReport,
-    compute_content_sha256,
-)
+
+from flask import Flask, render_template
+
 from reporting.professional_html import build_professional_report_view
+from reporting.professional_schema import ProfessionalPostCloseReport
+from reporting.regression_schema import RegressionResearchArtifact
+from tests.regression_fixtures import DISCLOSURE, make_artifact_document
+from tests.test_professional_report_schema import ProfessionalReportSchemaTests
 
 
 class TestRegressionPresentation(unittest.TestCase):
+    def setUp(self):
+        self.report = ProfessionalPostCloseReport.from_document(
+            ProfessionalReportSchemaTests()._document()
+        )
+        self.artifact = RegressionResearchArtifact.from_document(make_artifact_document())
 
-    def test_production_view_model_keeps_quantitative_research_unavailable(self):
-        from tests.test_professional_report_schema import ProfessionalReportSchemaTests
-        doc = ProfessionalReportSchemaTests()._document()
-        doc["identity"]["content_sha256"] = compute_content_sha256(doc)
-        report = ProfessionalPostCloseReport.from_document(doc)
-        view = build_professional_report_view(report)
-        self.assertEqual(view["quantitative_research"]["status"], "unavailable")
+    def test_available_overlay_is_structured_and_does_not_mutate_canonical_report(self):
+        before = self.report.to_document()
+        view = build_professional_report_view(
+            self.report,
+            regression_artifact=self.artifact,
+        )
+        research = view["quantitative_research"]
+        self.assertEqual(research["status"], "available")
+        self.assertEqual(research["sample_count"], 60)
+        self.assertEqual(research["ai_label"], "AI 模型參考建議")
+        self.assertEqual(research["output_name"], "模型方向參考")
+        self.assertEqual(research["confidence_level"], 0.95)
+        self.assertEqual(research["r_squared"], 0.2)
+        self.assertEqual(research["adjusted_r_squared"], 0.15)
+        self.assertEqual(research["warnings"], [])
+        self.assertEqual(research["disclosure"], DISCLOSURE)
+        self.assertEqual(len(research["factors"]), 3)
+        self.assertEqual(self.report.to_document(), before)
+        serialized_view = repr(view)
+        self.assertNotIn("objects/regression", serialized_view)
+        self.assertNotIn(self.artifact.identity.content_sha256, serialized_view)
 
-    def test_disclosure_text_matches_mandatory_specification(self):
-        from reporting.regression_schema import FORBIDDEN_WORDS
-        mandatory_disclosure = "\u6a21\u578b\u5c1a\u672a\u901a\u904e Ranking\u3001Calibration\u3001Quality \u8207 Transaction Value\uff0c\u56e0\u6b64\u4e0d\u63d0\u4f9b\u6b63\u5f0f\u9810\u6e2c\u6a5f\u7387\u3002"
-        ai_label = "AI \u6a21\u578b\u53c3\u8003\u5efa\u8b70"
-        uncalibrated_output_name = "\u6a21\u578b\u65b9\u5411\u53c3\u8003"
+    def test_unavailable_overlay_uses_fixed_safe_reason(self):
+        view = build_professional_report_view(
+            self.report,
+            regression_unavailable_reason="private bucket/path exception",
+        )
+        research = view["quantitative_research"]
+        self.assertEqual(research["status"], "unavailable")
+        self.assertNotIn("private", research["reason"])
+        self.assertEqual(research["data"], {})
 
-        self.assertIn("\u4e0d\u63d0\u4f9b\u6b63\u5f0f\u9810\u6e2c\u6a5f\u7387", mandatory_disclosure)
-        self.assertEqual(ai_label, "AI \u6a21\u578b\u53c3\u8003\u5efa\u8b70")
-        self.assertEqual(uncalibrated_output_name, "\u6a21\u578b\u65b9\u5411\u53c3\u8003")
+    def test_real_flask_response_renders_structured_statistics_without_raw_dict(self):
+        app = Flask(
+            __name__,
+            template_folder=str(Path(__file__).resolve().parents[1] / "templates"),
+        )
+        for endpoint in (
+            "account_page",
+            "ask_page",
+            "dashboard_page",
+            "industries_page",
+            "learn_page",
+            "line_login",
+            "market_page",
+            "reports_page",
+            "stocks_page",
+        ):
+            app.add_url_rule(f"/_test/{endpoint}", endpoint, lambda: "")
 
-        forbidden = ["Probability", "\u52dd\u7387", "\u4e0a\u6f35\u6a5f\u7387", "\u4e0b\u8dcc\u6a5f\u7387", "\u6b63\u5f0f\u9810\u6e2c", "\u8cb7\u9032\u8a0a\u865f", "\u8ce3\u51fa\u8a0a\u865f"]
-        for word in forbidden:
-            self.assertIn(word, FORBIDDEN_WORDS)
+        @app.get("/report")
+        def report_page():
+            view = build_professional_report_view(
+                self.report,
+                regression_artifact=self.artifact,
+            )
+            for section_name in (
+                "market",
+                "capital_flows",
+                "industries",
+                "securities",
+                "validation",
+                "next_session",
+                "governance",
+                "ai_reference",
+            ):
+                view[section_name] = {
+                    "status": "unavailable",
+                    "reason": "測試資料未提供。",
+                    "data": {},
+                }
+            return render_template(
+                "reports/post_close_professional.html",
+                report=view,
+            )
+
+        response = app.test_client().get("/report")
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        for expected in (
+            "研究期間",
+            "樣本數",
+            "Newey-West HAC",
+            "OLS /",
+            "HAC 標準誤",
+            "t-stat",
+            "p-value",
+            "95% CI",
+            "Adjusted R²",
+            "VIF",
+            "Breusch-Pagan",
+            "Durbin-Watson",
+            "Jarque-Bera",
+            "AI 模型參考建議",
+            "模型方向參考",
+            DISCLOSURE,
+        ):
+            self.assertIn(expected, html)
+        self.assertNotIn("<pre>{'", html)
+        for forbidden in ("Probability", "勝率", "上漲機率", "下跌機率", "買進訊號", "賣出訊號", "保證獲利"):
+            self.assertNotIn(forbidden, html)
 
 
 if __name__ == "__main__":
