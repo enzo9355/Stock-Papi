@@ -24,6 +24,97 @@ class CanonicalPublisherIntegrityTests(unittest.TestCase):
     def tearDown(self):
         self.tmp_dir.cleanup()
 
+    def test_publishes_regression_artifact_with_single_hash_ownership(self):
+        report_doc = self._base_report_doc()
+        metadata_doc = self._base_metadata_doc(report_doc)
+        prof_report = ProfessionalPostCloseReport.from_document(report_doc)
+
+        reg_artifact_doc = {
+            "schema_version": 1,
+            "kind": "absorb-regression-research-artifact",
+            "identity": {
+                "artifact_id": "TW-20260717-regression-ols-v1",
+                "market": "TW",
+                "source_market_date": "2026-07-17",
+                "applicable_trading_date": "2026-07-20",
+                "generated_at": "2026-07-17T10:30:00Z",
+                "source_manifest": "quant/v1/manifests/TW-20260717T103000Z-a1b2c3d4e5f6.json",
+                "source_manifest_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "input_dataset_object": "objects/regression-input/f1e2d3c4b5a697887766554433221100f1e2d3c4b5a697887766554433221100.json",
+                "input_dataset_sha256": "f1e2d3c4b5a697887766554433221100f1e2d3c4b5a697887766554433221100",
+                "input_dataset_content_sha256": "e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6",
+                "input_dataset_rows_sha256": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2",
+                "code_commit_sha": "da25d594d3b76865da22b891285ac0c85e710d86",
+                "generator_version": "1.0.0",
+                "content_sha256": "8f7e6d5c4b3a2109876543210fedcba98f7e6d5c4b3a2109876543210fedcba9",
+                "regression_spec_version": "1.0"
+            },
+            "regression_spec": {
+                "analysis_scope": "market_level_daily",
+                "entity_type": "market_index",
+                "universe_definition": "TWSE_TAIEX",
+                "observation_unit": "daily_session",
+                "model_family": "ols_linear_factor",
+                "dependent_variable": "five_session_forward_return",
+                "dependent_variable_definition": "5-session forward return over official TAIEX daily closing prices",
+                "independent_variables": ["volume_surge_ratio"],
+                "intercept": True,
+                "frequency": "daily",
+                "first_feature_session": "2025-07-10",
+                "last_feature_session": "2026-07-10",
+                "first_label_end_session": "2025-07-17",
+                "last_label_end_session": "2026-07-17",
+                "label_horizon_sessions": 5,
+                "sample_count": 245,
+                "missing_value_policy": "listwise_deletion",
+                "standardization_policy": "z_score",
+                "outlier_policy": "winsorize_1_99",
+                "covariance_estimator": "newey_west_hac",
+                "hac_max_lags": 4,
+                "confidence_level": 0.95
+            },
+            "results": [],
+            "fit_statistics": {
+                "r_squared": 0.1,
+                "adjusted_r_squared": 0.09,
+                "residual_standard_error": 0.01,
+                "degrees_of_freedom": 200,
+                "f_statistic": 10.0,
+                "f_p_value": 0.001
+            },
+            "diagnostics": {
+                "multicollinearity": {"status": "passed", "max_vif": 1.0, "vif_details": {}},
+                "heteroskedasticity": {"status": "passed", "test_name": "breusch_pagan", "test_statistic": 1.0, "p_value": 0.5, "threshold": 0.05},
+                "autocorrelation": {"status": "passed", "durbin_watson": 2.0},
+                "residual_normality": {"status": "passed", "jarque_bera_p_value": 0.5},
+                "data_quality": {"missing_rate": 0.0, "outlier_count": 0},
+                "warnings": []
+            },
+            "presentation": {
+                "headline": "近 245 個交易日因子迴歸分析顯示相關性",
+                "summary": "迴歸分析摘要",
+                "key_exposures": [],
+                "limitations": "歷史數據結果",
+                "disclosure": "模型尚未通過 Ranking、Calibration、Quality 與 Transaction Value，因此不提供正式預測機率。"
+            }
+        }
+
+        latest_path = publish_report_v2(
+            self.root,
+            metadata_doc,
+            professional_report=prof_report,
+            regression_artifact=reg_artifact_doc,
+        )
+        self.assertTrue(latest_path.exists())
+        latest_doc = json.loads(latest_path.read_text(encoding="utf-8"))
+        self.assertIn("metadata", latest_doc)
+        meta_file = self.root / "publish" / "reports" / "v2" / latest_doc["metadata"]
+        published_meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        self.assertIn("regression_research", published_meta)
+        reg_ptr = published_meta["regression_research"]
+        reg_file = self.root / "publish" / "reports" / "v2" / reg_ptr["object"]
+        self.assertTrue(reg_file.exists())
+
     def _base_report_doc(self):
         return ProfessionalReportSchemaTests()._document()
 
