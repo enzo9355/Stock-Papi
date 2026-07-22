@@ -305,7 +305,7 @@ Constant: `MAX_REGRESSION_INPUT_DATASET_BYTES: int = 5_000_000` (5MB)
     "row_count": 1,
     "calendar_id": "TWSE_TRADING_CALENDAR",
     "calendar_version": "2026.1",
-    "calendar_sha256": "c1a2l3e4n5d6a7r8901234567890abcdefc1a2l3e4n5d6a7r8901234567890ab",
+    "calendar_sha256": "c1a2b3e4f5d6a789901234567890abcdefc1a2b3e4f5d6a789901234567890ab",
     "canonical_rows_sha256": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2",
     "code_commit_sha": "da25d594d3b76865da22b891285ac0c85e710d86",
     "content_sha256": "e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6"
