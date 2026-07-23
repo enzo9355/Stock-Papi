@@ -1,3 +1,5 @@
+. (Join-Path $PSScriptRoot 'native_process.ps1')
+
 function Assert-PathWithinRoot {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -110,18 +112,12 @@ function Invoke-GcloudCaptured {
     $PreviousPythonPath = $env:PYTHONPATH
     try {
         $env:PYTHONPATH = $null
-        $Output = & $Gcloud @Arguments 2>&1
-        $ExitCode = $LASTEXITCODE
+        return Invoke-NativeProcessCaptured `
+            -FilePath $Gcloud `
+            -Arguments $Arguments `
+            -AllowFailure:$AllowFailure
     } finally {
         $env:PYTHONPATH = $PreviousPythonPath
-    }
-    $Text = $Output | Out-String
-    if ($ExitCode -ne 0 -and -not $AllowFailure) {
-        throw "gcloud command failed with exit code ${ExitCode}: $Text"
-    }
-    return [pscustomobject]@{
-        exit_code = $ExitCode
-        text = $Text
     }
 }
 

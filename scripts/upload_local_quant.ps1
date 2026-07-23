@@ -68,12 +68,8 @@ function Invoke-GcloudCopy {
     if ($NoClobber) { $Arguments += '--no-clobber' }
     $Arguments += @($Source, $Destination)
 
-    $OldPythonPath = $env:PYTHONPATH
-    $env:PYTHONPATH = $null
-    & $Gcloud @Arguments
-    $env:PYTHONPATH = $OldPythonPath
-
-    if ($LASTEXITCODE -ne 0) { throw "gcloud upload failed with exit code $LASTEXITCODE" }
+    $Result = Invoke-GcloudCaptured -Gcloud $Gcloud -Arguments $Arguments
+    if ($Result.text) { Write-Output $Result.text.TrimEnd() }
 }
 
 function Invoke-GcloudCopyBatch {
@@ -86,12 +82,8 @@ function Invoke-GcloudCopyBatch {
     $Arguments += $Sources
     $Arguments += $Destination
 
-    $OldPythonPath = $env:PYTHONPATH
-    $env:PYTHONPATH = $null
-    & $Gcloud @Arguments
-    $env:PYTHONPATH = $OldPythonPath
-
-    if ($LASTEXITCODE -ne 0) { throw "gcloud batch upload failed with exit code $LASTEXITCODE" }
+    $Result = Invoke-GcloudCaptured -Gcloud $Gcloud -Arguments $Arguments
+    if ($Result.text) { Write-Output $Result.text.TrimEnd() }
 }
 
 function Get-GcloudJson {
