@@ -3,11 +3,13 @@
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
 
+import reporting.regression_input_publisher as publisher_module
 from reporting.regression_input_publisher import (
     _validate_readback,
     publish_regression_input_dataset,
@@ -36,6 +38,21 @@ class TestRegressionInputPublisher(unittest.TestCase):
             trading_calendar=self.calendar,
         )
 
+    def race_after_exists_check(self, content):
+        real_exists = Path.exists
+        raced = False
+
+        def exists(path):
+            nonlocal raced
+            if path == self.object_path and not raced:
+                raced = True
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+                return False
+            return real_exists(path)
+
+        return exists
+
     def test_publish_and_identical_reuse_do_not_rewrite_immutable_object(self):
         pointer = self.publish()
         self.assertEqual(pointer["sha256"], self.object_sha)
@@ -53,18 +70,76 @@ class TestRegressionInputPublisher(unittest.TestCase):
             self.publish()
         self.assertEqual(self.object_path.read_bytes(), b"pre-existing different bytes")
 
-    def test_oversized_write_replace_and_readback_failures_clean_new_objects(self):
+    def test_same_content_race_is_reused_without_cleanup_ownership(self):
+        with mock.patch.object(
+            Path,
+            "exists",
+            autospec=True,
+            side_effect=self.race_after_exists_check(self.payload),
+        ), mock.patch(
+            "reporting.regression_input_publisher._validate_readback",
+            side_effect=ValueError("read-back failure"),
+        ):
+            with self.assertRaisesRegex(ValueError, "read-back"):
+                self.publish()
+        self.assertEqual(self.object_path.read_bytes(), self.payload)
+
+    def test_different_content_race_fails_closed_without_deleting_competitor(self):
+        competitor = b"concurrent writer bytes"
+        with mock.patch.object(
+            Path,
+            "exists",
+            autospec=True,
+            side_effect=self.race_after_exists_check(competitor),
+        ):
+            with self.assertRaisesRegex(ValueError, "immutable"):
+                self.publish()
+        self.assertEqual(self.object_path.read_bytes(), competitor)
+
+    def test_concurrent_writers_use_distinct_temps_and_only_one_owns_object(self):
+        writer = getattr(publisher_module, "_write_immutable", None)
+        self.assertIsNotNone(writer)
+        real_link = os.link
+        temporary_paths = []
+
+        def race(source, target):
+            temporary_paths.append(Path(source))
+            if len(temporary_paths) == 1:
+                self.assertTrue(writer(Path(target), self.payload))
+            return real_link(source, target)
+
+        with mock.patch.object(publisher_module.os, "link", side_effect=race):
+            self.assertFalse(writer(self.object_path, self.payload))
+
+        self.assertEqual(len(temporary_paths), 2)
+        self.assertEqual(len(set(temporary_paths)), 2)
+        self.assertEqual(self.object_path.read_bytes(), self.payload)
+
+    def test_atomic_writes_use_unique_temporary_paths(self):
+        temporary_paths = []
+
+        def record(source, _target):
+            temporary_paths.append(Path(source))
+
+        with mock.patch.object(publisher_module.os, "replace", side_effect=record):
+            publisher_module._write_atomic(self.root / "latest.json", b"one")
+            publisher_module._write_atomic(self.root / "latest.json", b"two")
+
+        self.assertEqual(len(temporary_paths), 2)
+        self.assertEqual(len(set(temporary_paths)), 2)
+
+    def test_oversized_write_link_and_readback_failures_clean_new_objects(self):
         with mock.patch("reporting.regression_input_publisher.MAX_REGRESSION_INPUT_DATASET_BYTES", 10):
             with self.assertRaisesRegex(ValueError, "size"):
                 self.publish()
 
-        with mock.patch("reporting.regression_input_publisher._write_atomic", side_effect=OSError("write")):
+        with mock.patch("reporting.regression_input_publisher._write_immutable", side_effect=OSError("write")):
             with self.assertRaisesRegex(RuntimeError, "write"):
                 self.publish()
         self.assertFalse(self.object_path.exists())
 
-        with mock.patch("reporting.regression_input_publisher.os.replace", side_effect=OSError("replace")):
-            with self.assertRaisesRegex(RuntimeError, "replace"):
+        with mock.patch("reporting.regression_input_publisher.os.link", side_effect=OSError("link")):
+            with self.assertRaisesRegex(RuntimeError, "link"):
                 self.publish()
         self.assertFalse(self.object_path.exists())
         self.assertFalse(any(self.root.rglob("*.tmp")))

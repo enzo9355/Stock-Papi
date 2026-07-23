@@ -4,6 +4,7 @@ import json
 import os
 import re
 from pathlib import Path
+import tempfile
 from typing import Any
 
 from . import REPORT_GENERATOR_VERSION, REPORT_SCHEMA_VERSION, git_commit_sha
@@ -39,15 +40,41 @@ def _json_bytes(document: dict) -> bytes:
     ).encode("utf-8")
 
 
-def _write_atomic(path: Path, content: bytes) -> None:
+def _write_temporary(path: Path, content: bytes) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+        delete=False,
+    ) as stream:
+        temporary = Path(stream.name)
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+    return temporary
+
+
+def _write_atomic(path: Path, content: bytes) -> None:
+    temporary = _write_temporary(path, content)
     try:
-        with temporary.open("wb") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
         os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _write_immutable(path: Path, content: bytes, conflict_message: str) -> bool:
+    """Publish complete bytes without replacing another writer's object."""
+    temporary = _write_temporary(path, content)
+    try:
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if path.read_bytes() != content:
+                raise ReportPublishError(conflict_message)
+            return False
+        return True
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -125,9 +152,6 @@ def _publish_report_v2_impl(
         _json_bytes(document["content"])
     ).hexdigest()
     
-    newly_created_canonical_path: Path | None = None
-    newly_created_regression_path: Path | None = None
-    newly_created_metadata_path: Path | None = None
     reg_obj: RegressionResearchArtifact | None = None
 
     # 2b. Process Regression Artifact (if provided)
@@ -159,10 +183,14 @@ def _publish_report_v2_impl(
                 raise ReportPublishError("immutable regression object conflict")
         else:
             try:
-                if _transaction_created is not None:
-                    _transaction_created.append(reg_path)
-                _write_atomic(reg_path, reg_bytes)
-                newly_created_regression_path = reg_path
+                created_by_this_transaction = _write_immutable(
+                    reg_path,
+                    reg_bytes,
+                    "immutable regression object conflict",
+                )
+                if created_by_this_transaction:
+                    if _transaction_created is not None:
+                        _transaction_created.append(reg_path)
                 readback_bytes = reg_path.read_bytes()
                 if not 0 < len(readback_bytes) <= MAX_REGRESSION_ARTIFACT_BYTES:
                     raise ReportPublishError("regression read-back size invalid")
@@ -173,12 +201,8 @@ def _publish_report_v2_impl(
                 if readback_obj.identity.content_sha256 != reg_obj.identity.content_sha256:
                     raise ReportPublishError("regression content_sha256 read-back mismatch")
             except ReportPublishError:
-                if newly_created_regression_path and newly_created_regression_path.exists():
-                    newly_created_regression_path.unlink(missing_ok=True)
                 raise
             except Exception as exc:
-                if newly_created_regression_path and newly_created_regression_path.exists():
-                    newly_created_regression_path.unlink(missing_ok=True)
                 raise ReportPublishError("failed to write/verify regression object") from exc
 
         document["regression_research"] = {
@@ -193,8 +217,6 @@ def _publish_report_v2_impl(
             schema = ReportMetadataV2.from_document(document)
             document = schema.to_document()
         except ValueError as exc:
-            if newly_created_regression_path and newly_created_regression_path.exists():
-                newly_created_regression_path.unlink(missing_ok=True)
             raise ReportPublishError("invalid metadata after injecting regression_research") from exc
 
     # 3. Process Canonical Report (ProfessionalPostCloseReport)
@@ -244,12 +266,8 @@ def _publish_report_v2_impl(
                 raise ReportPublishError("canonical report object size invalid")
             canonical_sha = hashlib.sha256(canonical_bytes).hexdigest()
         except ReportPublishError:
-            if newly_created_regression_path and newly_created_regression_path.exists():
-                newly_created_regression_path.unlink(missing_ok=True)
             raise
         except Exception as exc:
-            if newly_created_regression_path and newly_created_regression_path.exists():
-                newly_created_regression_path.unlink(missing_ok=True)
             raise ReportPublishError("failed to process canonical report") from exc
 
         canonical_relative = f"objects/canonical/{canonical_sha}.json"
@@ -258,15 +276,17 @@ def _publish_report_v2_impl(
         # 4. Write Canonical Object and verify
         if canonical_path.exists():
             if canonical_path.read_bytes() != canonical_bytes:
-                if newly_created_regression_path and newly_created_regression_path.exists():
-                    newly_created_regression_path.unlink(missing_ok=True)
                 raise ReportPublishError("immutable canonical object conflict")
         else:
             try:
-                if _transaction_created is not None:
-                    _transaction_created.append(canonical_path)
-                _write_atomic(canonical_path, canonical_bytes)
-                newly_created_canonical_path = canonical_path
+                created_by_this_transaction = _write_immutable(
+                    canonical_path,
+                    canonical_bytes,
+                    "immutable canonical object conflict",
+                )
+                if created_by_this_transaction:
+                    if _transaction_created is not None:
+                        _transaction_created.append(canonical_path)
                 readback_bytes = canonical_path.read_bytes()
                 if not 0 < len(readback_bytes) <= MAX_CANONICAL_REPORT_BYTES:
                     raise ReportPublishError("canonical read-back size invalid")
@@ -276,16 +296,8 @@ def _publish_report_v2_impl(
                 readback_obj = ProfessionalPostCloseReport.from_document(readback_doc)
                 validate_professional_report_binding(metadata=schema, report=readback_obj)
             except ReportPublishError:
-                if newly_created_canonical_path and newly_created_canonical_path.exists():
-                    newly_created_canonical_path.unlink(missing_ok=True)
-                if newly_created_regression_path and newly_created_regression_path.exists():
-                    newly_created_regression_path.unlink(missing_ok=True)
                 raise
             except Exception as exc:
-                if newly_created_canonical_path and newly_created_canonical_path.exists():
-                    newly_created_canonical_path.unlink(missing_ok=True)
-                if newly_created_regression_path and newly_created_regression_path.exists():
-                    newly_created_regression_path.unlink(missing_ok=True)
                 raise ReportPublishError("failed to write/verify canonical object") from exc
 
         # 5. Update metadata pointer
@@ -302,10 +314,6 @@ def _publish_report_v2_impl(
             schema = ReportMetadataV2.from_document(document)
             document = schema.to_document()
         except ValueError as exc:
-            if newly_created_canonical_path and newly_created_canonical_path.exists():
-                newly_created_canonical_path.unlink(missing_ok=True)
-            if newly_created_regression_path and newly_created_regression_path.exists():
-                newly_created_regression_path.unlink(missing_ok=True)
             raise ReportPublishError("invalid metadata after injecting professional_report") from exc
 
     document["content_sha256"] = hashlib.sha256(
@@ -379,35 +387,37 @@ def _publish_report_v2_impl(
 
     if pdf_bytes is not None:
         object_path = publish / document["pdf_path"]
-        if object_path.exists() and object_path.read_bytes() != pdf_bytes:
-            raise ReportPublishError("immutable report v2 PDF conflict")
-        if not object_path.exists():
-            _write_atomic(object_path, pdf_bytes)
+        if object_path.exists():
+            if object_path.read_bytes() != pdf_bytes:
+                raise ReportPublishError("immutable report v2 PDF conflict")
+        else:
+            created_by_this_transaction = _write_immutable(
+                object_path,
+                pdf_bytes,
+                "immutable report v2 PDF conflict",
+            )
+            if created_by_this_transaction and _transaction_created is not None:
+                _transaction_created.append(object_path)
     metadata_path = publish / metadata_relative
-    if metadata_path.exists() and metadata_path.read_bytes() != metadata_bytes:
-        if newly_created_canonical_path and newly_created_canonical_path.exists():
-            newly_created_canonical_path.unlink(missing_ok=True)
-        raise ReportPublishError("immutable report v2 metadata conflict")
-    if not metadata_path.exists():
+    if metadata_path.exists():
+        if metadata_path.read_bytes() != metadata_bytes:
+            raise ReportPublishError("immutable report v2 metadata conflict")
+    else:
         try:
-            if _transaction_created is not None:
-                _transaction_created.append(metadata_path)
-            _write_atomic(metadata_path, metadata_bytes)
-            newly_created_metadata_path = metadata_path
+            created_by_this_transaction = _write_immutable(
+                metadata_path,
+                metadata_bytes,
+                "immutable report v2 metadata conflict",
+            )
+            if created_by_this_transaction:
+                if _transaction_created is not None:
+                    _transaction_created.append(metadata_path)
             readback_meta = metadata_path.read_bytes()
             if hashlib.sha256(readback_meta).hexdigest() != metadata_sha:
                 raise ReportPublishError("metadata read-back SHA256 mismatch")
         except ReportPublishError:
-            if newly_created_metadata_path and newly_created_metadata_path.exists():
-                newly_created_metadata_path.unlink(missing_ok=True)
-            if newly_created_canonical_path and newly_created_canonical_path.exists():
-                newly_created_canonical_path.unlink(missing_ok=True)
             raise
         except Exception as exc:
-            if newly_created_metadata_path and newly_created_metadata_path.exists():
-                newly_created_metadata_path.unlink(missing_ok=True)
-            if newly_created_canonical_path and newly_created_canonical_path.exists():
-                newly_created_canonical_path.unlink(missing_ok=True)
             raise ReportPublishError("failed to write/verify metadata") from exc
 
     if not existing:
@@ -437,16 +447,8 @@ def _publish_report_v2_impl(
     if document.get("product_mode") is not None:
         latest["product_mode"] = document["product_mode"]
     latest_path = publish / f"latest-TW-{document['report_type']}.json"
-    try:
-        _write_atomic(index_path, index_bytes)
-        _write_atomic(latest_path, _json_bytes(latest))
-    except Exception:
-        if newly_created_metadata_path and newly_created_metadata_path.exists():
-            newly_created_metadata_path.unlink(missing_ok=True)
-        if newly_created_canonical_path and newly_created_canonical_path.exists():
-            newly_created_canonical_path.unlink(missing_ok=True)
-        _restore_atomic(index_path, previous_index)
-        raise
+    _write_atomic(index_path, index_bytes)
+    _write_atomic(latest_path, _json_bytes(latest))
     return latest_path
 
 
@@ -583,7 +585,7 @@ def publish_report(
         if pdf_path.read_bytes() != pdf_bytes:
             raise ReportPublishError("immutable PDF object conflict")
     else:
-        _write_atomic(pdf_path, pdf_bytes)
+        _write_immutable(pdf_path, pdf_bytes, "immutable PDF object conflict")
 
     manifest = report.source.manifest
     public_report = build_public_report(report)
@@ -622,7 +624,7 @@ def publish_report(
         if metadata_path.read_bytes() != metadata_bytes:
             raise ReportPublishError("immutable metadata conflict")
     else:
-        _write_atomic(metadata_path, metadata_bytes)
+        _write_immutable(metadata_path, metadata_bytes, "immutable metadata conflict")
 
     entry = {
         "report_date": metadata["report_date"],

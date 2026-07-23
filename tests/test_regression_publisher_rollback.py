@@ -3,14 +3,17 @@
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
 
+import reporting.publisher as publisher_module
 from reporting.exceptions import ReportPublishError
 from reporting.professional_schema import ProfessionalPostCloseReport
 from reporting.publisher import _write_atomic as real_write_atomic
+from reporting.publisher import _write_immutable as real_write_immutable
 from reporting.publisher import publish_report_v2
 from reporting.regression_schema import serialize_regression_artifact
 from tests import test_canonical_publisher_integrity as canonical_helpers
@@ -74,6 +77,29 @@ class TestRegressionPublisherRollback(unittest.TestCase):
             return real_write_atomic(path, content)
         return writer
 
+    def fail_immutable_write_for(self, fragment):
+        def writer(path, content, conflict_message):
+            if fragment in path.as_posix():
+                raise OSError(f"injected {fragment} failure")
+            return real_write_immutable(path, content, conflict_message)
+
+        return writer
+
+    def race_after_exists_check(self, target, content):
+        real_exists = Path.exists
+        raced = False
+
+        def exists(path):
+            nonlocal raced
+            if path == target and not raced:
+                raced = True
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+                return False
+            return real_exists(path)
+
+        return exists
+
     def test_regression_canonical_metadata_index_and_latest_failures_roll_back(self):
         stages = (
             "objects/regression/",
@@ -94,10 +120,17 @@ class TestRegressionPublisherRollback(unittest.TestCase):
                     self.index_path.write_bytes(self.previous_index)
                     self.latest_path.write_bytes(self.previous_latest)
                     try:
-                        with mock.patch(
-                            "reporting.publisher._write_atomic",
-                            side_effect=self.fail_write_for(stage),
-                        ):
+                        target = (
+                            "reporting.publisher._write_immutable"
+                            if stage in {"objects/regression/", "objects/canonical/", "metadata/"}
+                            else "reporting.publisher._write_atomic"
+                        )
+                        side_effect = (
+                            self.fail_immutable_write_for(stage)
+                            if target.endswith("_write_immutable")
+                            else self.fail_write_for(stage)
+                        )
+                        with mock.patch(target, side_effect=side_effect):
                             with self.assertRaises(Exception):
                                 self.publish()
                         self.assert_previous_pointers_restored()
@@ -131,6 +164,39 @@ class TestRegressionPublisherRollback(unittest.TestCase):
         self.assert_previous_pointers_restored()
         self.assertFalse(any((self.publish_dir / "objects" / "regression").glob("*.json")))
 
+    def test_rollback_does_not_delete_object_recreated_after_owned_delete(self):
+        regression_path = self.publish_dir / "objects" / "regression" / f"{self.regression_sha}.json"
+        competitor = b"recreated by another writer"
+        original_read = Path.read_bytes
+        original_unlink = Path.unlink
+        recreated = False
+
+        def corrupted_read(path):
+            payload = original_read(path)
+            if path == regression_path:
+                return payload[:-1] + bytes([payload[-1] ^ 1])
+            return payload
+
+        def recreate_after_delete(path, *args, **kwargs):
+            nonlocal recreated
+            result = original_unlink(path, *args, **kwargs)
+            if path == regression_path and not recreated:
+                recreated = True
+                path.write_bytes(competitor)
+            return result
+
+        with mock.patch.object(Path, "read_bytes", corrupted_read), mock.patch.object(
+            Path,
+            "unlink",
+            recreate_after_delete,
+        ):
+            with self.assertRaises(ReportPublishError):
+                self.publish()
+
+        self.assertTrue(regression_path.exists())
+        self.assertEqual(regression_path.read_bytes(), competitor)
+        self.assert_previous_pointers_restored()
+
     def test_regression_content_hash_mismatch_writes_nothing(self):
         artifact = copy.deepcopy(self.artifact)
         artifact["presentation"]["headline"] += " tampered"
@@ -158,6 +224,70 @@ class TestRegressionPublisherRollback(unittest.TestCase):
                 self.publish()
         self.assertEqual(regression_path.read_bytes(), self.regression_bytes)
         self.assert_previous_pointers_restored()
+
+    def test_same_content_race_is_reused_and_survives_later_rollback(self):
+        regression_path = self.publish_dir / "objects" / "regression" / f"{self.regression_sha}.json"
+        with mock.patch.object(
+            Path,
+            "exists",
+            autospec=True,
+            side_effect=self.race_after_exists_check(regression_path, self.regression_bytes),
+        ), mock.patch(
+            "reporting.publisher._write_atomic",
+            side_effect=self.fail_write_for("index-TW.json"),
+        ):
+            with self.assertRaises(OSError):
+                self.publish()
+        self.assertEqual(regression_path.read_bytes(), self.regression_bytes)
+        self.assert_previous_pointers_restored()
+
+    def test_different_content_race_fails_closed_and_preserves_competitor(self):
+        regression_path = self.publish_dir / "objects" / "regression" / f"{self.regression_sha}.json"
+        competitor = b"concurrent writer bytes"
+        with mock.patch.object(
+            Path,
+            "exists",
+            autospec=True,
+            side_effect=self.race_after_exists_check(regression_path, competitor),
+        ):
+            with self.assertRaisesRegex(ReportPublishError, "immutable regression"):
+                self.publish()
+        self.assertEqual(regression_path.read_bytes(), competitor)
+        self.assert_previous_pointers_restored()
+
+    def test_concurrent_immutable_writers_use_distinct_temps_and_single_owner(self):
+        writer = getattr(publisher_module, "_write_immutable", None)
+        self.assertIsNotNone(writer)
+        path = self.publish_dir / "objects" / "regression" / "race.json"
+        payload = b"same bytes"
+        real_link = os.link
+        temporary_paths = []
+
+        def race(source, target):
+            temporary_paths.append(Path(source))
+            if len(temporary_paths) == 1:
+                self.assertTrue(writer(Path(target), payload, "immutable conflict"))
+            return real_link(source, target)
+
+        with mock.patch.object(publisher_module.os, "link", side_effect=race):
+            self.assertFalse(writer(path, payload, "immutable conflict"))
+
+        self.assertEqual(len(temporary_paths), 2)
+        self.assertEqual(len(set(temporary_paths)), 2)
+        self.assertEqual(path.read_bytes(), payload)
+
+    def test_atomic_pointer_writes_use_unique_temporary_paths(self):
+        temporary_paths = []
+
+        def record(source, _target):
+            temporary_paths.append(Path(source))
+
+        with mock.patch.object(publisher_module.os, "replace", side_effect=record):
+            real_write_atomic(self.index_path, b"one")
+            real_write_atomic(self.index_path, b"two")
+
+        self.assertEqual(len(temporary_paths), 2)
+        self.assertEqual(len(set(temporary_paths)), 2)
 
     def test_metadata_conflict_rolls_back_new_regression_and_canonical_objects(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
 from reporting.regression_input_schema import (
@@ -20,15 +21,41 @@ from reporting.regression_input_schema import (
 PUBLISH_ROOT = "publish"
 
 
-def _write_atomic(path: Path, content: bytes) -> None:
+def _write_temporary(path: Path, content: bytes) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+        delete=False,
+    ) as stream:
+        temporary = Path(stream.name)
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+    return temporary
+
+
+def _write_atomic(path: Path, content: bytes) -> None:
+    temporary = _write_temporary(path, content)
     try:
-        with temporary.open("wb") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
         os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _write_immutable(path: Path, content: bytes) -> bool:
+    """Publish complete bytes without replacing another writer's object."""
+    temporary = _write_temporary(path, content)
+    try:
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if path.read_bytes() != content:
+                raise ValueError(f"immutable input dataset conflict at {path}")
+            return False
+        return True
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -108,8 +135,8 @@ def publish_regression_input_dataset(
     root = Path(publish_root if publish_root is not None else PUBLISH_ROOT)
     object_path = root / relative_path
 
-    existed_before = object_path.exists()
-    if existed_before:
+    created_by_this_transaction = False
+    if object_path.exists():
         try:
             existing = object_path.read_bytes()
         except OSError as exc:
@@ -125,16 +152,19 @@ def publish_regression_input_dataset(
         return _pointer(relative_path, object_sha256, verified)
 
     try:
-        _write_atomic(object_path, payload)
+        created_by_this_transaction = _write_immutable(object_path, payload)
+    except ValueError:
+        raise
     except Exception as exc:
-        if object_path.exists():
+        if created_by_this_transaction:
             _cleanup_new(object_path)
         raise RuntimeError(f"input dataset write failed: {exc}") from exc
 
     try:
         readback = object_path.read_bytes()
     except OSError as exc:
-        _cleanup_new(object_path)
+        if created_by_this_transaction:
+            _cleanup_new(object_path)
         raise RuntimeError(f"input dataset read-back failed: {exc}") from exc
 
     try:
@@ -145,6 +175,7 @@ def publish_regression_input_dataset(
             trading_calendar=trading_calendar,
         )
     except Exception:
-        _cleanup_new(object_path)
+        if created_by_this_transaction:
+            _cleanup_new(object_path)
         raise
     return _pointer(relative_path, object_sha256, verified)

@@ -229,15 +229,17 @@ class CanonicalPublisherIntegrityTests(unittest.TestCase):
         metadata_doc = self._base_metadata_doc(report_doc)
         professional_report = ProfessionalPostCloseReport.from_document(report_doc)
 
-        original_write_atomic = reporting.publisher._write_atomic
+        original_write_immutable = reporting.publisher._write_immutable
 
-        def fake_write_atomic(path, content):
+        def fake_write_immutable(path, content, conflict_message):
             if "objects/canonical" in path.as_posix():
-                original_write_atomic(path, b"x" * (MAX_CANONICAL_REPORT_BYTES + 1))
-            else:
-                original_write_atomic(path, content)
+                content = b"x" * (MAX_CANONICAL_REPORT_BYTES + 1)
+            return original_write_immutable(path, content, conflict_message)
 
-        with patch("reporting.publisher._write_atomic", side_effect=fake_write_atomic):
+        with patch(
+            "reporting.publisher._write_immutable",
+            side_effect=fake_write_immutable,
+        ):
             with self.assertRaises(ReportPublishError) as cm:
                 publish_report_v2(
                     root=self.root,
