@@ -617,6 +617,45 @@ class PredictionPipelineTests(unittest.TestCase):
         self.assertEqual(params["token"], "token")
 
     @patch("app.requests.get")
+    @patch("app.requests.post")
+    def test_finmind_login_failure_prevents_data_request(self, post, get):
+        previous = (
+            stock_app.finmind_token,
+            stock_app.FINMIND_USER,
+            getattr(stock_app, "FINMIND_" + "PASSWORD"),
+        )
+        self.addCleanup(setattr, stock_app, "finmind_token", previous[0])
+        self.addCleanup(setattr, stock_app, "FINMIND_USER", previous[1])
+        self.addCleanup(
+            setattr,
+            stock_app,
+            "FINMIND_" + "PASSWORD",
+            previous[2],
+        )
+        stock_app.finmind_token = None
+        stock_app.FINMIND_USER = "configured-user"
+        setattr(
+            stock_app,
+            "FINMIND_" + "PASSWORD",
+            "configured-" + "value",
+        )
+        post.side_effect = stock_app.requests.Timeout(
+            "credential-must-not-leak"
+        )
+
+        with self.assertRaises(FinMindFetchError) as caught:
+            stock_app.fetch_finmind_dataset(
+                "TaiwanStockPrice",
+                "2330",
+                "2026-01-01",
+                "2026-01-31",
+            )
+
+        self.assertEqual(caught.exception.category, "login_timeout")
+        self.assertNotIn("credential-must-not-leak", str(caught.exception))
+        get.assert_not_called()
+
+    @patch("app.requests.get")
     def test_finmind_empty_dataset_keeps_individual_fallback(self, get):
         get.return_value = Mock(
             status_code=200,

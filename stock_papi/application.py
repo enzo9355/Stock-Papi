@@ -347,7 +347,11 @@ YFINANCE_CACHE_SECONDS = 3600
 def finmind_login():
     global finmind_token
     finmind_token = _provider_finmind_login(
-        finmind_token, FINMIND_USER, FINMIND_PASSWORD, requests
+        finmind_token,
+        FINMIND_USER,
+        FINMIND_PASSWORD,
+        requests,
+        logger=logger,
     )
 
 def fetch_finmind_dataset(dataset, code, start_date, end_date):
@@ -365,6 +369,8 @@ def fetch_finmind_dataset(dataset, code, start_date, end_date):
             requests_module=requests,
             pd=pd,
             logger=logger,
+            sleep_fn=time.sleep,
+            retry_attempts=2,
         )
     except FinMindFetchError as exc:
         if exc.blocked_until is not None:
