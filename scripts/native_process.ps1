@@ -16,9 +16,7 @@ function Protect-NativeProcessText {
         "(?:$QuotedValue|" +
         "[^\s,;}\]\r\n&#]{1,$MaxTextLength})"
     )
-    $HeaderValue = (
-        "(?:$QuotedValue|[^\r\n]{1,$MaxTextLength})"
-    )
+    $LineValue = "[^\r\n]{1,$MaxTextLength}"
     $PrefixedKey = (
         "[A-Za-z][A-Za-z0-9_]{0,127}_" +
         "(?:token|password|secret|api_key|access_token|client_secret)"
@@ -46,17 +44,17 @@ function Protect-NativeProcessText {
     $CliCompositePrefix = '(?i)(--(?:authorization|cookie)\s+)'
     $Safe = [regex]::Replace(
         $Safe,
-        $AuthorizationPrefix + $HeaderValue,
+        $AuthorizationPrefix + $LineValue,
         '$1[REDACTED]'
     )
     $Safe = [regex]::Replace(
         $Safe,
-        $CliCompositePrefix + $HeaderValue,
+        $CliCompositePrefix + $LineValue,
         '$1[REDACTED]'
     )
     $Safe = [regex]::Replace(
         $Safe,
-        $CookiePrefix + $HeaderValue,
+        $CookiePrefix + $LineValue,
         '$1[REDACTED]'
     )
     $Safe = [regex]::Replace($Safe, $KeyPrefix + $Value, '$1[REDACTED]')

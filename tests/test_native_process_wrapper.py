@@ -224,6 +224,43 @@ class NativeProcessWrapperTests(unittest.TestCase):
                 f'--cookie "session={cookie}; csrf={csrf}"',
                 (cookie, csrf),
             ),
+            (
+                "escaped_json_digest",
+                '{"authorization":"Digest username=\\"user\\",'
+                f'nonce=\\"{nonce}\\",response=\\"{response}\\""}}',
+                (nonce, response),
+            ),
+            (
+                "escaped_json_cookie",
+                '{"cookie":"'
+                f'session=\\"{cookie}\\"; csrf=\\"{csrf}\\""}}',
+                (cookie, csrf),
+            ),
+            (
+                "escaped_cli_digest",
+                '--authorization "Digest username=\\"user\\", '
+                f'nonce=\\"{nonce}\\""',
+                (nonce,),
+            ),
+            (
+                "escaped_cli_cookie",
+                '--cookie "'
+                f'session=\\"{cookie}\\"; csrf=\\"{csrf}\\""',
+                (cookie, csrf),
+            ),
+            (
+                "minified_json_authorization_trailing_field",
+                '{"authorization":"Digest username=\\"user\\",'
+                f'nonce=\\"{nonce}\\"","status":"failed"}}',
+                (nonce,),
+            ),
+            (
+                "minified_json_cookie_trailing_field",
+                '{"cookie":"'
+                f'session=\\"{cookie}\\"; csrf=\\"{csrf}\\"",'
+                '"status":"failed"}',
+                (cookie, csrf),
+            ),
             ("basic_header", f"Authorization: Basic {prefixed}", (prefixed,)),
             ("api_key_header", f"Authorization: ApiKey {prefixed}", (prefixed,)),
             ("basic_cli", f"--authorization Basic {prefixed}", (prefixed,)),
@@ -271,14 +308,14 @@ class NativeProcessWrapperTests(unittest.TestCase):
         for label, value, secrets in cases:
             with self.subTest(label=label, surface="return"):
                 redacted = self.redact(value)
-                combined = (
-                    redacted
-                    + self.last_redact_process.stdout
-                    + self.last_redact_process.stderr
-                )
                 self.assertIn("[REDACTED]", redacted)
                 for original in secrets:
-                    self.assertNotIn(original, combined)
+                    for surface in (
+                        redacted,
+                        self.last_redact_process.stdout,
+                        self.last_redact_process.stderr,
+                    ):
+                        self.assertNotIn(original, surface)
 
         command_body = "".join(
             f"echo({value}\r\n>&2 echo({value}\r\n"
@@ -294,7 +331,8 @@ class NativeProcessWrapperTests(unittest.TestCase):
         for label, _, secrets in cases:
             with self.subTest(label=label, surface="stdout_stderr"):
                 for original in secrets:
-                    self.assertNotIn(original, captured_combined)
+                    self.assertNotIn(original, captured.stdout)
+                    self.assertNotIn(original, captured.stderr)
 
         for ordinary in (
             "token_count=42",
@@ -314,17 +352,16 @@ class NativeProcessWrapperTests(unittest.TestCase):
             tail_line_count=len(cases) * 2,
         )
         self.assertNotEqual(failed.returncode, 0)
-        combined = (
-            failed.stdout
-            + failed.stderr
-            + log.read_text(encoding="utf-8-sig", errors="replace")
-        )
+        logged = log.read_text(encoding="utf-8-sig", errors="replace")
+        combined = failed.stdout + failed.stderr + logged
         self.assertIn("exit code 7", failed.stdout + failed.stderr)
         self.assertGreaterEqual(combined.count("[REDACTED]"), len(cases) * 2)
         for label, _, secrets in cases:
             with self.subTest(label=label, surface="stream_log_exception"):
                 for original in secrets:
-                    self.assertNotIn(original, combined)
+                    self.assertNotIn(original, failed.stdout)
+                    self.assertNotIn(original, failed.stderr)
+                    self.assertNotIn(original, logged)
 
     def test_stderr_progress_with_zero_exit_is_success_and_redacted(self):
         result = self.run_helper(
