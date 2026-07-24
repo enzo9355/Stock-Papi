@@ -64,15 +64,15 @@ class PipelineSchedulerTests(unittest.TestCase):
             "logs\\tasks",
             "current-",
             "Get-Command powershell.exe",
-            "Invoke-NativeProcessCaptured",
+            "Invoke-NativeProcessStreaming",
             ".exit_code",
-            ".text",
-            "Tee-Object",
+            "-LogPath $LogPath",
             "success = $false",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, source)
         self.assertIn("Disable-ScheduledTask -TaskName 'ABSORB-FullBacktest'", source)
+        self.assertNotIn("Invoke-NativeProcessCaptured", source)
         self.assertIn("$Checkpoint.status -eq 'completed'", source)
         for forbidden in ("LINE_CHANNEL_ACCESS_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "Bearer"):
             with self.subTest(forbidden=forbidden):

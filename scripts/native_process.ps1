@@ -1,32 +1,134 @@
 function Protect-NativeProcessText {
     param([AllowEmptyString()][string]$Text)
 
-    $Safe = $Text -replace (
-        '(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+'
-    ), 'Bearer [REDACTED]'
-    return $Safe -replace (
-        '(?i)\b(token|password|authorization|cookie|secret)' +
-        '\s*[:=]\s*[^\s;]+'
-    ), '$1=[REDACTED]'
+    $MaxTextLength = 16384
+    $WasTruncated = $Text.Length -gt $MaxTextLength
+    $Safe = if ($WasTruncated) {
+        $Text.Substring(0, $MaxTextLength)
+    } else {
+        $Text
+    }
+    $Value = (
+        "(?:Bearer\s+[^\s,;}\]\r\n&#]{1,$MaxTextLength}|" +
+        """[^""\r\n]{0,$MaxTextLength}""|" +
+        "'[^'\r\n]{0,$MaxTextLength}'|" +
+        "[^\s,;}\]\r\n&#]{1,$MaxTextLength})"
+    )
+    $KeyPrefix = (
+        "(?i)((?<![A-Za-z0-9_])[""']?" +
+        "(?:token|password|authorization|cookie|secret)[""']?" +
+        "\s*[:=]\s*)"
+    )
+    $CliPrefix = (
+        '(?i)(--(?:token|password|authorization|cookie|secret)\s+)'
+    )
+    $Safe = [regex]::Replace($Safe, $KeyPrefix + $Value, '$1[REDACTED]')
+    $Safe = [regex]::Replace($Safe, $CliPrefix + $Value, '$1[REDACTED]')
+    $Safe = [regex]::Replace(
+        $Safe,
+        "(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]{1,$MaxTextLength}",
+        '$1[REDACTED]'
+    )
+    if ($WasTruncated) {
+        return $Safe + '[TRUNCATED]'
+    }
+    return $Safe
 }
 
 function Invoke-NativeProcessCaptured {
     param(
         [Parameter(Mandatory)][string]$FilePath,
         [string[]]$Arguments = @(),
+        [ValidateRange(1024, 4194304)][int]$MaxOutputChars = 1048576,
         [switch]$AllowFailure
     )
 
     $PreviousErrorActionPreference = $ErrorActionPreference
     $ExitCode = 1
+    $Builder = New-Object System.Text.StringBuilder
+    $WasTruncated = $false
     try {
         $ErrorActionPreference = 'Continue'
-        $Output = & $FilePath @Arguments 2>&1
+        & $FilePath @Arguments 2>&1 | ForEach-Object {
+            $Line = Protect-NativeProcessText ([string]$_)
+            if ($Builder.Length -lt $MaxOutputChars) {
+                $Chunk = if ($Builder.Length) {
+                    [Environment]::NewLine + $Line
+                } else {
+                    $Line
+                }
+                $Remaining = $MaxOutputChars - $Builder.Length
+                if ($Chunk.Length -gt $Remaining) {
+                    [void]$Builder.Append($Chunk.Substring(0, $Remaining))
+                    $WasTruncated = $true
+                } else {
+                    [void]$Builder.Append($Chunk)
+                }
+            } else {
+                $WasTruncated = $true
+            }
+        }
         $ExitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $PreviousErrorActionPreference
     }
-    $Text = Protect-NativeProcessText ($Output | Out-String)
+    $Text = $Builder.ToString()
+    if ($WasTruncated) {
+        $Text += '[TRUNCATED]'
+    }
+    if ($ExitCode -ne 0 -and -not $AllowFailure) {
+        throw "Native process failed with exit code ${ExitCode}: $Text"
+    }
+    return [pscustomobject]@{
+        exit_code = $ExitCode
+        text = $Text
+    }
+}
+
+function Invoke-NativeProcessStreaming {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [string[]]$Arguments = @(),
+        [Parameter(Mandatory)][string]$LogPath,
+        [ValidateRange(1, 1000)][int]$TailLineCount = 100,
+        [switch]$AllowFailure
+    )
+
+    try {
+        Get-Command -Name $FilePath -ErrorAction Stop | Out-Null
+    } catch {
+        throw 'Native process start failed: executable was not found'
+    }
+
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    $ExitCode = 1
+    $Tail = New-Object 'System.Collections.Generic.Queue[string]'
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $FilePath @Arguments 2>&1 | ForEach-Object {
+            $Line = Protect-NativeProcessText ([string]$_)
+            try {
+                Add-Content `
+                    -LiteralPath $LogPath `
+                    -Value $Line `
+                    -Encoding utf8 `
+                    -ErrorAction Stop
+            } catch {
+                throw [System.IO.IOException]::new(
+                    'Native process log write failed'
+                )
+            }
+            $Tail.Enqueue($Line)
+            while ($Tail.Count -gt $TailLineCount) {
+                [void]$Tail.Dequeue()
+            }
+        }
+        $ExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
+    }
+
+    $Text = [string]::Join([Environment]::NewLine, $Tail.ToArray())
     if ($ExitCode -ne 0 -and -not $AllowFailure) {
         throw "Native process failed with exit code ${ExitCode}: $Text"
     }
