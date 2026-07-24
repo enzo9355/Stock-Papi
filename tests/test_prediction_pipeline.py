@@ -13,6 +13,7 @@ os.environ.setdefault("LINE_CHANNEL_ACCESS_TOKEN", "test")
 os.environ.setdefault("LINE_CHANNEL_SECRET", "test")
 
 import app as stock_app
+from stock_papi.integrations.market_data.provider import FinMindFetchError
 
 
 def quant_cloud_payloads(
@@ -594,7 +595,11 @@ class PredictionPipelineTests(unittest.TestCase):
 
     @patch("app.requests.get")
     def test_finmind_dataset_fetch_uses_existing_token(self, get):
-        get.return_value = Mock(json=lambda: {"data": [{"value": 1}]})
+        get.return_value = Mock(
+            status_code=200,
+            headers={},
+            json=lambda: {"data": [{"value": 1}]},
+        )
         previous_token = stock_app.finmind_token
         stock_app.finmind_token = "token"
         self.addCleanup(setattr, stock_app, "finmind_token", previous_token)
@@ -611,26 +616,127 @@ class PredictionPipelineTests(unittest.TestCase):
         self.assertEqual(params["dataset"], "DatasetName")
         self.assertEqual(params["token"], "token")
 
+    @patch("app.requests.get")
+    @patch("app.requests.post")
+    def test_finmind_login_failure_prevents_data_request(self, post, get):
+        previous = (
+            stock_app.finmind_token,
+            stock_app.FINMIND_USER,
+            getattr(stock_app, "FINMIND_" + "PASSWORD"),
+        )
+        self.addCleanup(setattr, stock_app, "finmind_token", previous[0])
+        self.addCleanup(setattr, stock_app, "FINMIND_USER", previous[1])
+        self.addCleanup(
+            setattr,
+            stock_app,
+            "FINMIND_" + "PASSWORD",
+            previous[2],
+        )
+        stock_app.finmind_token = None
+        stock_app.FINMIND_USER = "configured-user"
+        setattr(
+            stock_app,
+            "FINMIND_" + "PASSWORD",
+            "configured-" + "value",
+        )
+        post.side_effect = stock_app.requests.Timeout(
+            "credential-must-not-leak"
+        )
+
+        with self.assertRaises(FinMindFetchError) as caught:
+            stock_app.fetch_finmind_dataset(
+                "TaiwanStockPrice",
+                "2330",
+                "2026-01-01",
+                "2026-01-31",
+            )
+
+        self.assertEqual(caught.exception.category, "login_timeout")
+        self.assertNotIn("credential-must-not-leak", str(caught.exception))
+        get.assert_not_called()
+
+    @patch("app.requests.get")
+    def test_finmind_empty_dataset_keeps_individual_fallback(self, get):
+        get.return_value = Mock(
+            status_code=200,
+            headers={},
+            json=lambda: {"data": []},
+        )
+
+        result = stock_app.fetch_finmind_dataset(
+            "TaiwanStockPrice",
+            "2330",
+            "2026-01-01",
+            "2026-01-31",
+        )
+
+        self.assertTrue(result.empty)
+
     @patch("app.finmind_login")
     @patch("app.time.time", return_value=1000.0)
     @patch("app.requests.get")
     def test_finmind_quota_errors_pause_followup_requests(self, get, _time, _login):
         self.addCleanup(setattr, stock_app, "_FINMIND_BLOCKED_UNTIL", 0)
-        for status, cooldown in ((402, 60), (403, 30)):
+        for status, cooldown in ((402, 60), (403, 30), (429, 30)):
             with self.subTest(status=status):
-                response = Mock(status_code=status)
-                response.raise_for_status.side_effect = stock_app.requests.HTTPError(str(status))
+                response = Mock(
+                    status_code=status,
+                    headers={},
+                    json=lambda: {"msg": "token=must-not-leak"},
+                )
                 get.reset_mock(return_value=True, side_effect=True)
                 get.return_value = response
                 stock_app._FINMIND_BLOCKED_UNTIL = 0
 
-                for dataset in ("TaiwanStockPrice", "TaiwanStockInstitutionalInvestorsBuySell"):
+                with self.assertRaises(FinMindFetchError) as first:
                     stock_app.fetch_finmind_dataset(
-                        dataset, "4126", "2024-01-01", "2026-01-01"
+                        "TaiwanStockPrice",
+                        "4126",
+                        "2024-01-01",
+                        "2026-01-01",
+                    )
+                with self.assertRaises(FinMindFetchError) as blocked:
+                    stock_app.fetch_finmind_dataset(
+                        "TaiwanStockInstitutionalInvestorsBuySell",
+                        "4126",
+                        "2024-01-01",
+                        "2026-01-01",
                     )
 
+                self.assertNotEqual(first.exception.category, "blocked")
+                self.assertEqual(blocked.exception.category, "blocked")
                 self.assertEqual(get.call_count, 1)
                 self.assertEqual(stock_app._FINMIND_BLOCKED_UNTIL, 1000.0 + cooldown * 60)
+
+    @patch("app.fetch_yfinance_price_history")
+    @patch("app.requests.get")
+    def test_finmind_401_is_not_hidden_by_yahoo(self, get, yahoo):
+        previous_token = stock_app.finmind_token
+        stock_app.finmind_token = "existing-token"
+        self.addCleanup(setattr, stock_app, "finmind_token", previous_token)
+        self.addCleanup(setattr, stock_app, "_FINMIND_BLOCKED_UNTIL", 0)
+        stock_app._FINMIND_BLOCKED_UNTIL = 0
+        get.return_value = Mock(
+            status_code=401,
+            headers={},
+            json=lambda: {
+                "msg": "response-" + "credential",
+                "token": "response-" + "credential",
+            },
+        )
+
+        with self.assertRaises(FinMindFetchError) as caught:
+            stock_app.get_data("2330", days=30)
+
+        self.assertEqual(
+            caught.exception.category,
+            "authentication_or_permission",
+        )
+        self.assertEqual(caught.exception.http_status, 401)
+        self.assertTrue(caught.exception.provider_wide)
+        self.assertNotIn("response-credential", str(caught.exception))
+        self.assertEqual(get.call_count, 1)
+        yahoo.assert_not_called()
 
     @patch("app.fetch_finmind_dataset", return_value=pd.DataFrame())
     @patch("app.fetch_yfinance_price_history", return_value=pd.DataFrame())
@@ -644,6 +750,27 @@ class PredictionPipelineTests(unittest.TestCase):
 
         self.assertTrue(result.empty)
         self.assertEqual(yf_history.call_args.args[0], ["4126.TWO"])
+
+    @patch("app.fetch_finmind_dataset")
+    @patch(
+        "app.fetch_yfinance_price_history",
+        return_value=pd.DataFrame({"Close": [1]}),
+    )
+    def test_get_data_does_not_hide_provider_failure_with_yahoo(
+        self, _yahoo, finmind
+    ):
+        finmind.side_effect = FinMindFetchError(
+            "http_error",
+            "TaiwanStockPrice",
+            "2330",
+            "2026-01-01",
+            "2026-01-31",
+            http_status=503,
+            exception_type="HTTPError",
+        )
+
+        with self.assertRaises(FinMindFetchError):
+            stock_app.get_data("2330", days=30)
 
     @patch("app.fetch_option_context_history", return_value=(pd.DataFrame(),) * 3)
     @patch("app.requests.get", side_effect=AssertionError("legacy request path"))

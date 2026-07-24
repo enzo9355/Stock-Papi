@@ -230,12 +230,12 @@ def get_data(
         price = add_market_context(price, market, spy)
         price = add_option_context(price, *fetch_option_context(start_date, end_date))
         return clean(merge_chip(price))
+    raw = fetch_finmind("TaiwanStockPrice", code, start_date, end_date)
     yf_price = pd.DataFrame()
     if code != "TAIEX":
         info = twstock_codes.get(code)
         suffix = ".TWO" if getattr(info, "data_source", "") == "tpex" else ".TW"
         yf_price = fetch_yfinance([f"{code}{suffix}"], start_date, end_date)
-    raw = fetch_finmind("TaiwanStockPrice", code, start_date, end_date)
     price = None
     if not raw.empty:
         price = pd.DataFrame({

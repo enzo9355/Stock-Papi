@@ -60,14 +60,36 @@ class PipelineSchedulerTests(unittest.TestCase):
 
     def test_task_wrapper_records_success_or_failure_without_secrets(self):
         source = (Path(__file__).parents[1] / "scripts" / "invoke_pipeline_task.ps1").read_text(encoding="utf-8")
-        for required in ("logs\\tasks", "current-", "Get-Command powershell.exe", "Tee-Object", "$LASTEXITCODE", "success = $false"):
+        for required in (
+            "logs\\tasks",
+            "current-",
+            "Get-Command powershell.exe",
+            "Invoke-NativeProcessStreaming",
+            ".exit_code",
+            "-LogPath $LogPath",
+            "success = $false",
+        ):
             with self.subTest(required=required):
                 self.assertIn(required, source)
         self.assertIn("Disable-ScheduledTask -TaskName 'ABSORB-FullBacktest'", source)
+        self.assertNotIn("Invoke-NativeProcessCaptured", source)
         self.assertIn("$Checkpoint.status -eq 'completed'", source)
         for forbidden in ("LINE_CHANNEL_ACCESS_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "Bearer"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, source)
+
+    def test_gcloud_wrapper_uses_native_exit_code_helper(self):
+        scripts = Path(__file__).parents[1] / "scripts"
+        helper = scripts / "native_process.ps1"
+        release_common = (scripts / "observation_release_common.ps1").read_text(
+            encoding="utf-8"
+        )
+        upload = (scripts / "upload_local_quant.ps1").read_text(encoding="utf-8")
+
+        self.assertTrue(helper.is_file())
+        self.assertIn("Invoke-NativeProcessCaptured", release_common)
+        self.assertNotIn("$Output = & $Gcloud @Arguments 2>&1", release_common)
+        self.assertNotIn("& $Gcloud @Arguments", upload)
 
 
 if __name__ == "__main__": unittest.main()

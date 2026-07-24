@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if ($DataRoot -ne 'D:\AbsorbData') { throw 'Data root is not allowlisted' }
+. (Join-Path $PSScriptRoot 'native_process.ps1')
 
 $Definitions = @{
     'TW-PostClose' = @{ Script = 'run_tw_post_close_pipeline.ps1'; Arguments = @('-PublishObservation') }
@@ -32,8 +33,12 @@ if (-not (Test-Path -LiteralPath $PowerShellExe -PathType Leaf)) { throw 'PowerS
 $Arguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath, '-DataRoot', $DataRoot) + $Definition.Arguments
 
 try {
-    & $PowerShellExe @Arguments 2>&1 | Tee-Object -FilePath $LogPath -Append
-    $ExitCode = $LASTEXITCODE
+    $Result = Invoke-NativeProcessStreaming `
+        -FilePath $PowerShellExe `
+        -Arguments $Arguments `
+        -LogPath $LogPath `
+        -AllowFailure
+    $ExitCode = $Result.exit_code
     if ($ExitCode -ne 0) { throw "Pipeline exited with code $ExitCode" }
     @{ job = $Job; started_at = $StartedAt.ToString('o'); finished_at = [DateTimeOffset]::Now.ToString('o'); success = $true; exit_code = 0; log = $LogPath } |
         ConvertTo-Json -Compress | Set-Content -LiteralPath $StatusPath -Encoding utf8
