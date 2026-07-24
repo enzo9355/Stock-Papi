@@ -269,6 +269,26 @@ class FinMindProviderTests(unittest.TestCase):
         self.assertEqual(self.last_get.call_count, 1)
         self.last_sleep.assert_not_called()
 
+    def test_401_is_authentication_failure_without_retry_or_body_leak(self):
+        unsafe = "response-" + "credential"
+        error = self.assert_fetch_error(
+            FakeResponse(
+                status_code=401,
+                payload={"msg": unsafe, "token": unsafe},
+            )
+        )
+
+        self.assertEqual(error.category, "authentication_or_permission")
+        self.assertEqual(error.http_status, 401)
+        self.assertIsNone(error.retry_after_seconds)
+        self.assertIsNone(error.blocked_until)
+        self.assertTrue(error.provider_wide)
+        self.assertEqual(self.last_get.call_count, 1)
+        self.last_sleep.assert_not_called()
+        self.assertEqual(self.last_logger.warning.call_count, 1)
+        serialized = str(error.to_dict()) + str(self.last_logger.mock_calls)
+        self.assertNotIn(unsafe, serialized)
+
     def test_timeout_and_connection_errors_keep_safe_categories(self):
         for exception, category in (
             (requests.Timeout("token=live-token-must-not-leak"), "timeout"),

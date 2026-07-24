@@ -708,6 +708,36 @@ class PredictionPipelineTests(unittest.TestCase):
                 self.assertEqual(get.call_count, 1)
                 self.assertEqual(stock_app._FINMIND_BLOCKED_UNTIL, 1000.0 + cooldown * 60)
 
+    @patch("app.fetch_yfinance_price_history")
+    @patch("app.requests.get")
+    def test_finmind_401_is_not_hidden_by_yahoo(self, get, yahoo):
+        previous_token = stock_app.finmind_token
+        stock_app.finmind_token = "existing-token"
+        self.addCleanup(setattr, stock_app, "finmind_token", previous_token)
+        self.addCleanup(setattr, stock_app, "_FINMIND_BLOCKED_UNTIL", 0)
+        stock_app._FINMIND_BLOCKED_UNTIL = 0
+        get.return_value = Mock(
+            status_code=401,
+            headers={},
+            json=lambda: {
+                "msg": "response-" + "credential",
+                "token": "response-" + "credential",
+            },
+        )
+
+        with self.assertRaises(FinMindFetchError) as caught:
+            stock_app.get_data("2330", days=30)
+
+        self.assertEqual(
+            caught.exception.category,
+            "authentication_or_permission",
+        )
+        self.assertEqual(caught.exception.http_status, 401)
+        self.assertTrue(caught.exception.provider_wide)
+        self.assertNotIn("response-credential", str(caught.exception))
+        self.assertEqual(get.call_count, 1)
+        yahoo.assert_not_called()
+
     @patch("app.fetch_finmind_dataset", return_value=pd.DataFrame())
     @patch("app.fetch_yfinance_price_history", return_value=pd.DataFrame())
     def test_get_data_uses_tpex_yahoo_suffix(self, yf_history, _finmind):

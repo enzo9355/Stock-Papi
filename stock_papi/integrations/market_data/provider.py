@@ -242,6 +242,7 @@ def fetch_finmind_dataset(
             continue
         if status >= 400:
             category = {
+                401: "authentication_or_permission",
                 402: "quota_or_rate_limit",
                 403: "authentication_or_permission",
                 429: "quota_or_rate_limit",
