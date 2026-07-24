@@ -96,6 +96,7 @@ class NativeProcessWrapperTests(unittest.TestCase):
                 ),
             )
             result = self.run_powershell(harness)
+        self.last_redact_process = result
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout.strip().splitlines()[-1])
 
@@ -159,6 +160,69 @@ class NativeProcessWrapperTests(unittest.TestCase):
         redacted_secret = self.redact("token=" + secret)
         self.assertEqual(redacted_secret, "token=[REDACTED][TRUNCATED]")
         self.assertNotIn("y" * 100, redacted_secret)
+
+    def test_redacts_composite_authorization_cookie_and_prefixed_keys(self):
+        secret = "composite-" + "credential"
+        second_secret = "csrf-" + "credential"
+        cases = (
+            (f"Authorization: Basic {secret}", (secret,)),
+            (f"Authorization: ApiKey {secret}", (secret,)),
+            (f'"authorization": "Custom {secret}"', (secret,)),
+            (f"--authorization Basic {secret}", (secret,)),
+            (f'--authorization "Basic {secret}"', (secret,)),
+            (
+                f"Cookie: session={secret}; csrf={second_secret}",
+                (secret, second_secret),
+            ),
+            ("FINMIND_" + f"TOKEN={secret}", (secret,)),
+            ("LINE_CHANNEL_" + f"SECRET={secret}", (secret,)),
+            ("SERVICE_PASS" + f"WORD={secret}", (secret,)),
+            ("ACCESS_" + f"TOKEN={secret}", (secret,)),
+            ("CLIENT_" + f"SECRET={secret}", (secret,)),
+            ("API_" + f"KEY={secret}", (secret,)),
+            ("SERVICE_" + f"COOKIE={secret}", (secret,)),
+            ("SERVICE_" + f"AUTHORIZATION=Basic {secret}", (secret,)),
+            ("SERVICE_" + f"API_KEY={secret}", (secret,)),
+        )
+
+        for value, secrets in cases:
+            with self.subTest(prefix=value.split(secret)[0]):
+                redacted = self.redact(value)
+                combined = (
+                    redacted
+                    + self.last_redact_process.stdout
+                    + self.last_redact_process.stderr
+                )
+                self.assertIn("[REDACTED]", redacted)
+                for original in secrets:
+                    self.assertNotIn(original, combined)
+
+        for ordinary in (
+            "token_count=42",
+            "secret_count=3",
+            "client_secret_count=7",
+        ):
+            with self.subTest(ordinary=ordinary):
+                self.assertEqual(self.redact(ordinary), ordinary)
+
+        command_body = "".join(
+            f">&2 echo({value}\r\n" for value, _ in cases
+        ) + "exit /b 7\r\n"
+        failed, log = self.run_streaming(
+            command_body,
+            allow_failure=False,
+            tail_line_count=len(cases),
+        )
+        self.assertNotEqual(failed.returncode, 0)
+        combined = (
+            failed.stdout
+            + failed.stderr
+            + log.read_text(encoding="utf-8-sig", errors="replace")
+        )
+        self.assertGreaterEqual(combined.count("[REDACTED]"), len(cases))
+        for _, secrets in cases:
+            for original in secrets:
+                self.assertNotIn(original, combined)
 
     def test_stderr_progress_with_zero_exit_is_success_and_redacted(self):
         result = self.run_helper(

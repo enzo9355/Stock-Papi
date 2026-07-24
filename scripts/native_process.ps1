@@ -8,19 +8,63 @@ function Protect-NativeProcessText {
     } else {
         $Text
     }
-    $Value = (
-        "(?:Bearer\s+[^\s,;}\]\r\n&#]{1,$MaxTextLength}|" +
+    $QuotedValue = (
         """[^""\r\n]{0,$MaxTextLength}""|" +
-        "'[^'\r\n]{0,$MaxTextLength}'|" +
+        "'[^'\r\n]{0,$MaxTextLength}'"
+    )
+    $Value = (
+        "(?:$QuotedValue|" +
         "[^\s,;}\]\r\n&#]{1,$MaxTextLength})"
+    )
+    $AuthorizationValue = (
+        "(?:$QuotedValue|" +
+        "[A-Za-z][A-Za-z0-9._-]{0,64}\s+" +
+        "[^\s,;\r\n]{1,$MaxTextLength}|" +
+        "[^\s,;\r\n]{1,$MaxTextLength})"
+    )
+    $HeaderValue = (
+        "(?:$QuotedValue|[^\r\n]{1,$MaxTextLength})"
+    )
+    $PrefixedKey = (
+        "[A-Za-z][A-Za-z0-9_]{0,127}_" +
+        "(?:token|password|secret|cookie|authorization|" +
+        "api_key|access_token|client_secret)"
+    )
+    $AuthorizationPrefix = (
+        "(?i)((?<![A-Za-z0-9_])[""']?" +
+        "(?:authorization|" +
+        "[A-Za-z][A-Za-z0-9_]{0,127}_authorization)[""']?" +
+        "\s*[:=]\s*)"
+    )
+    $CookiePrefix = (
+        "(?i)((?<![A-Za-z0-9_])[""']?" +
+        "(?:cookie|[A-Za-z][A-Za-z0-9_]{0,127}_cookie)[""']?" +
+        "\s*[:=]\s*)"
     )
     $KeyPrefix = (
         "(?i)((?<![A-Za-z0-9_])[""']?" +
-        "(?:token|password|authorization|cookie|secret)[""']?" +
+        "(?:token|password|authorization|cookie|secret|api_key|" +
+        "$PrefixedKey)[""']?" +
         "\s*[:=]\s*)"
     )
     $CliPrefix = (
         '(?i)(--(?:token|password|authorization|cookie|secret)\s+)'
+    )
+    $CliAuthorizationPrefix = '(?i)(--authorization\s+)'
+    $Safe = [regex]::Replace(
+        $Safe,
+        $AuthorizationPrefix + $AuthorizationValue,
+        '$1[REDACTED]'
+    )
+    $Safe = [regex]::Replace(
+        $Safe,
+        $CliAuthorizationPrefix + $AuthorizationValue,
+        '$1[REDACTED]'
+    )
+    $Safe = [regex]::Replace(
+        $Safe,
+        $CookiePrefix + $HeaderValue,
+        '$1[REDACTED]'
     )
     $Safe = [regex]::Replace($Safe, $KeyPrefix + $Value, '$1[REDACTED]')
     $Safe = [regex]::Replace($Safe, $CliPrefix + $Value, '$1[REDACTED]')
